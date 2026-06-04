@@ -1,0 +1,150 @@
+services:
+  db:
+    image: postgres:18
+    container_name: doko-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/18/docker
+    expose:
+      - "5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    networks:
+      - dokonet
+
+  redis:
+    image: redis:7-alpine
+    container_name: doko-redis
+    restart: unless-stopped
+    networks:
+      - dokonet
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: ./docker/web/Dockerfile
+    container_name: doko-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      CONNECTOR_HUB_URL: "http://connector_hub:8080"
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - doko_media:/app/media
+      - doko_static:/app/staticfiles
+    expose:
+      - "8000"
+    command: ["/entrypoint.sh"]
+    networks:
+      - dokonet
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: ./docker/web/Dockerfile
+    container_name: doko-celery-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+    volumes:
+      - doko_media:/app/media
+    command: celery -A core worker -l INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dokonet
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: ./docker/web/Dockerfile
+    container_name: doko-celery-beat
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      CELERY_BROKER_URL: "redis://redis:6379/0"
+      CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+    volumes:
+      - doko_media:/app/media
+      - celerybeat_data:/app/celerybeat
+    command: celery -A core beat -l INFO --schedule /app/celerybeat/celerybeat-schedule
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - dokonet
+
+
+  connector_hub:
+    build:
+      context: ./docker/connector-hub
+      dockerfile: Dockerfile
+    container_name: doko-connector-hub
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - dokonet
+
+
+  nginx:
+    build:
+      context: .
+      dockerfile: ./docker/nginx/Dockerfile
+    container_name: doko-nginx
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "${DOKO_HTTP_BIND:-127.0.0.1}:${DOKO_HTTP_PORT:-8080}:80"
+    volumes:
+      - doko_media:/app/media:ro
+      - doko_static:/app/staticfiles:ro
+    networks:
+      - dokonet
+
+
+networks:
+  dokonet:
+
+volumes:
+  pgdata:
+  doko_media:
+  doko_static:
+  celerybeat_data:

@@ -1,0 +1,28 @@
+services:
+  frontend:
+    image: node:22-alpine
+    container_name: doko-frontend
+    working_dir: /app
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ""
+    volumes:
+      - ./frontend:/app
+      - doko_frontend_node_modules:/app/node_modules
+    command: sh -lc "npm ci && npm run dev -- --host 0.0.0.0"
+    expose:
+      - "5173"
+    networks:
+      - dokonet
+
+  nginx:
+    depends_on:
+      - web
+      - frontend
+    volumes:
+      - ./docker/nginx/nginx.vite.conf:/etc/nginx/nginx.conf:ro
+      - doko_media:/app/media:ro
+      - doko_static:/app/staticfiles:ro
+
+volumes:
+  doko_frontend_node_modules:
