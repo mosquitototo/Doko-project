@@ -9,11 +9,14 @@ Its goal is to make day-to-day security operations more structured, traceable, a
 #### Dashboard
 <img width="1194" height="564" alt="image" src="https://github.com/user-attachments/assets/1d161c18-8b63-42a4-86e5-4b97eb6cb0d2" />
 
+
 #### Case
 <img width="1202" height="505" alt="image" src="https://github.com/user-attachments/assets/eb5b5645-c2e9-4b3b-af26-da123cca0987" />
 
+
 #### Alerts
-<img width="1195" height="425" alt="image" src="https://github.com/user-attachments/assets/839021a0-d2c1-4810-9c9e-26e1fe235eff" />
+<img width="1192" height="433" alt="image" src="https://github.com/user-attachments/assets/0a96da0f-7840-43a6-b1af-858049b8e7b7" />
+
 
 #### Catbot (yes we love cats)  
 <img width="715" height="735" alt="image" src="https://github.com/user-attachments/assets/8f10bb1f-6eeb-4252-ae01-7924593528b8" />
