@@ -943,7 +943,7 @@ export default function SettingsCaseManagement() {
             ) : (
               <SectionHint>
                 The selected template receives the exchange metadata, including recipients,
-                message_id and references.
+                message_id and references, but not the previous body, to a SOAR (no email module here).
               </SectionHint>
             )}
           </label>

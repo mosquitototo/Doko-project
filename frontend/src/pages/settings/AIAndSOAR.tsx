@@ -1055,17 +1055,6 @@ export default function AIAndSOARSettingsPage() {
                       </label>
 
                       <label className="space-y-2">
-                        <FieldLabel required>Provider kind</FieldLabel>
-                        <SettingInput
-                          value={soarForm.provider_kind}
-                          disabled={!canManage || saving || deleting}
-                          onChange={(e) =>
-                            setSoarForm((p) => ({ ...p, provider_kind: e.target.value }))
-                          }
-                        />
-                      </label>
-
-                      <label className="space-y-2">
                         <FieldLabel>Timeout (seconds)</FieldLabel>
                         <SettingInput
                           type="number"
@@ -1080,8 +1069,6 @@ export default function AIAndSOARSettingsPage() {
                           }
                         />
                       </label>
-
-                      <div />
 
                       <label className="space-y-2 xl:col-span-2">
                         <FieldLabel required>Base URL</FieldLabel>
@@ -1532,17 +1519,6 @@ export default function AIAndSOARSettingsPage() {
             </label>
 
             <label className="space-y-2">
-              <FieldLabel required>Provider kind</FieldLabel>
-              <SettingInput
-                value={llmForm.provider_kind}
-                disabled={!canManage || saving}
-                onChange={(e) =>
-                  setLlmForm((p) => ({ ...p, provider_kind: e.target.value }))
-                }
-              />
-            </label>
-
-            <label className="space-y-2">
               <FieldLabel required>Default model</FieldLabel>
               <SettingInput
                 value={llmForm.default_model}
@@ -1568,6 +1544,8 @@ export default function AIAndSOARSettingsPage() {
                 }
               />
             </label>
+
+            <div />
 
             <label className="space-y-2 xl:col-span-2">
               <FieldLabel required>Base URL</FieldLabel>
