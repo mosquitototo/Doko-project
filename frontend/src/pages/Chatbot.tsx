@@ -3,7 +3,7 @@ import { useMe } from "../contexts/MeContext";
 import Card from "../components/ui/Card";
 import { useToast } from "../components/ui/toast";
 import {
-  archiveChatSession,
+  clearChatSession,
   ChatMessage,
   ChatRun,
   ChatSession,
@@ -289,18 +289,15 @@ export default function ChatbotPage() {
   }, [activeSession?.messages?.length, run?.status]);
 
   async function handleClearConversation() {
-    if (!canUseChat) return;
     if (!activeSession) return;
 
     setClearing(true);
-    try {
-      await archiveChatSession(activeSession.id);
 
-      const created = await createChatSession({
-        title: "New chat",
-        surface: "dedicated",
-        client_tab_id: clientTabId,
-      });
+    try {
+      const previousSessionId = activeSession.id;
+      const created = await clearChatSession(
+        previousSessionId
+      );
 
       setActiveSession(created);
       setRun(null);
@@ -308,14 +305,16 @@ export default function ChatbotPage() {
 
       toast.push({
         kind: "success",
-        title: "Chat",
+        title: "Assistant",
         message: "Conversation cleared",
       });
     } catch (e: any) {
       toast.push({
         kind: "error",
-        title: "Chat",
-        message: e?.message || "Unable to clear conversation",
+        title: "Assistant",
+        message:
+          e?.message ||
+          "Unable to clear conversation",
       });
     } finally {
       setClearing(false);

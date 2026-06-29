@@ -46,6 +46,38 @@ export type ChatAction = {
   prompt_overrides_schema: Record<string, unknown>;
 };
 
+export type ChatProgressStep = {
+  label: string;
+  updated_at?: string;
+};
+
+export type ChatRunProgress = {
+  label?: string;
+  preview?: string;
+  updated_at?: string;
+  steps?: ChatProgressStep[];
+};
+
+export type ChatActionRun = {
+  id: string;
+  status:
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  template_name: string;
+  template_code: string;
+  remote_run_id: string;
+  remote_status: string;
+  error_message: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+
 export type ChatRun = {
   id: string;
   request_id: string;
@@ -56,7 +88,11 @@ export type ChatRun = {
   error_message: string;
   selected_template_code?: string;
   selected_command?: string;
-  provider_execution?: Record<string, unknown>;
+  progress?: ChatRunProgress;
+  provider_execution?: {
+    ui_progress?: Omit<ChatRunProgress, "steps">;
+    ui_progress_history?: ChatProgressStep[];
+  };
   cancel_requested?: boolean;
   cancel_requested_at?: string | null;
   started_at?: string | null;
@@ -64,6 +100,7 @@ export type ChatRun = {
   created_at: string;
   updated_at: string;
   drafts?: ChatDraft[];
+  actions?: ChatActionRun[];
 };
 
 type Paginated<T> = {
@@ -161,9 +198,12 @@ export async function postDraft(draftId: string): Promise<void> {
   );
 }
 
-export async function clearChatSession(sessionId: string): Promise<void> {
+export async function clearChatSession(
+  sessionId: string
+): Promise<ChatSession> {
   const csrfToken = await ensureCsrf();
-  await api.post(
+
+  const { data } = await api.post(
     `/api/chat/sessions/${sessionId}/clear`,
     {},
     {
@@ -172,6 +212,8 @@ export async function clearChatSession(sessionId: string): Promise<void> {
       },
     }
   );
+
+  return data;
 }
 
 export async function archiveChatSession(sessionId: string): Promise<void> {

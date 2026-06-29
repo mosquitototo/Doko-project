@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from django.db import transaction
 from django.utils import timezone
 
 from .models import ChatGeneratedDraft, ChatRun, ChatSession, InvestigationTemplate
@@ -78,18 +79,59 @@ class ChatSessionArchiveView(APIView):
 class ChatSessionClearView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @transaction.atomic
     def post(self, request, session_id):
-        if not user_has_perm(request.user, "chat.use"):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        if not user_has_perm(
+            request.user,
+            "chat.use",
+        ):
+            return _forbidden()
 
-        session = ChatSession.objects.filter(id=session_id, user=request.user, is_archived=False).first()
+        session = ChatSession.objects.filter(
+            id=session_id,
+            user=request.user,
+            is_archived=False,
+        ).first()
+
         if not session:
-            return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"detail": "Session not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        now = timezone.now()
+
+        ChatRun.objects.filter(
+            session=session,
+            status__in=["queued", "running"],
+        ).update(
+            cancel_requested=True,
+            cancel_requested_at=now,
+            updated_at=now,
+        )
 
         session.is_archived = True
-        session.save(update_fields=["is_archived", "updated_at"])
+        session.save(
+            update_fields=[
+                "is_archived",
+                "updated_at",
+            ]
+        )
 
-        return Response({"ok": True}, status=status.HTTP_200_OK)
+        replacement = ChatSession.objects.create(
+            user=request.user,
+            title=session.title,
+            surface=session.surface,
+            page_type=session.page_type,
+            object_id=session.object_id,
+            customer_id=session.customer_id,
+            client_tab_id=session.client_tab_id,
+        )
+
+        return Response(
+            ChatSessionSerializer(replacement).data,
+            status=status.HTTP_200_OK,
+        )
     
 
 class ChatRunCreateView(APIView):
@@ -102,7 +144,11 @@ class ChatRunCreateView(APIView):
         if not user_has_perm(request.user, "chat.llm.use"):
             return _forbidden()
         
-        session = ChatSession.objects.filter(id=session_id, user=request.user).first()
+        session = ChatSession.objects.filter(
+            id=session_id,
+            user=request.user,
+            is_archived=False,
+        ).first()
         if not session:
             return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
         client_tab_id = (request.data.get("client_tab_id") or "").strip()
@@ -146,13 +192,21 @@ class ChatRunCreateView(APIView):
         try:
             task = execute_chat_run_task.delay(str(run.id))
             run.worker_task_id = task.id or ""
+            queued_at = timezone.now().isoformat()
+
             run.provider_execution = {
                 **(run.provider_execution or {}),
                 "ui_progress": {
                     "label": "Queued…",
                     "preview": "",
-                    "updated_at": timezone.now().isoformat(),
+                    "updated_at": queued_at,
                 },
+                "ui_progress_history": [
+                    {
+                        "label": "Queued…",
+                        "updated_at": queued_at,
+                    }
+                ],
             }
             run.save(update_fields=["worker_task_id", "provider_execution", "updated_at"])
         except Exception:

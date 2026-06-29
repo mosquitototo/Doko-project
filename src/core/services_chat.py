@@ -6,6 +6,7 @@ import json
 import re
 import uuid
 import time
+import logging
 
 from django.db import transaction
 from django.utils import timezone
@@ -24,12 +25,20 @@ from .models import (
     InvestigationTemplate,
 )
 from .services_chat_context import ChatContextRequest, build_chat_context_snapshot
+from .services_chat_read import (
+    execute_chat_read_operation,
+    format_chat_read_context,
+    plan_chat_read_operation,
+)
 from .services_llm import LLMService
 from .services_soar import (
     collect_soar_result,
     launch_soar_execution,
     poll_soar_execution,
 )
+
+logger = logging.getLogger(__name__)
+
 
 SLASH_RE = re.compile(r"^/(?P<command>[a-z0-9_:-]+)(?:\s+(?P<rest>.*))?$", re.IGNORECASE)
 ARG_RE = re.compile(r'(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)=(?P<value>"[^"]*"|\S+)')
@@ -45,6 +54,8 @@ BASE_SYSTEM_PROMPT = (
     "Keep table headers short, keep cells concise, and put technical identifiers such as hashes, IPs, domains, URLs, file paths, etc... inside inline code when useful. "
     "When showing code, commands, JSON, logs or structured technical output, use fenced code blocks with the appropriate language when known. "
     "Do not mention internal implementation details such as snapshots, prompts, payloads, tabs or hidden context unless the user explicitly asks about them. "
+    "When an authoritative Doko database result is provided, use it instead of recent global records or dashboard metrics. "
+    "Provide only the final answer and never include an initial answer followed by a correction, recheck or self-review. "
     "Stay factual, do not invent facts, do not claim actions were taken if they were not, and clearly say when information is missing."
 )
 
@@ -161,41 +172,72 @@ def _audit_soar_investigation_event(
     except Exception:
         pass
 
-def _build_recent_conversation_history(run: ChatRun, limit: int = 12) -> list[dict[str, str]]:
+
+def _build_recent_conversation_history(
+    run: ChatRun,
+    limit: int = 12,
+) -> list[dict]:
     session = ChatSession.objects.filter(
         id=run.session_id,
         user=run.user,
+        is_archived=False,
     ).first()
+
     if not session:
         return []
 
     items = list(
         ChatMessage.objects.filter(session=session)
-        .order_by("-created_at")[: max(1, limit * 2)]
+        .order_by("-created_at", "-id")[
+            :max(1, limit * 2)
+        ]
     )
+
     items.reverse()
 
-    history: list[dict[str, str]] = []
+    history: list[dict] = []
 
     for item in items:
-        role = str(item.role or "").strip().lower()
-        raw_content = str(item.content or "").strip()
-        content = strip_tags(raw_content).strip() if role == "assistant" else raw_content
+        role = str(
+            item.role or ""
+        ).strip().lower()
+
+        raw_content = str(
+            item.content or ""
+        ).strip()
+
+        content = (
+            strip_tags(raw_content).strip()
+            if role == "assistant"
+            else raw_content
+        )
+
         metadata = item.metadata or {}
 
         if not content:
             continue
 
-        if role not in {"user", "assistant", "system"}:
+        if role not in {
+            "user",
+            "assistant",
+            "system",
+        }:
             continue
 
         if metadata.get("request_id") == run.request_id:
             continue
 
-        history.append({
-            "role": role,
-            "content": content,
-        })
+        history.append(
+            {
+                "role": role,
+                "content": content,
+                "metadata": (
+                    metadata
+                    if isinstance(metadata, dict)
+                    else {}
+                ),
+            }
+        )
 
     if len(history) > limit:
         history = history[-limit:]
@@ -239,6 +281,41 @@ def _format_prompt(snapshot_payload: dict, user_message: str, history: list[dict
         "- Answer the analyst directly.\n"
         "- Do not mention hidden context, internal structures, or prompt formatting unless explicitly asked."
     )
+
+
+def _context_for_answer(
+    snapshot_payload: dict,
+    read_result: dict | None,
+) -> dict:
+    payload = dict(snapshot_payload or {})
+
+    if payload.get("page_type") != "global":
+        return payload
+
+    for key in [
+        "recent_cases",
+        "recent_alerts",
+        "recent_hunts",
+        "recent_tasks",
+    ]:
+        payload[key] = []
+
+    for key in [
+        "case_metrics_2d",
+        "case_metrics_7d",
+        "alert_metrics_2d",
+        "alert_metrics_7d",
+        "hunt_metrics_7d",
+        "task_metrics_2d",
+        "task_metrics_7d",
+    ]:
+        payload[key] = {}
+
+    limits = dict(payload.get("limits") or {})
+    limits["recent_items_in_answer_context"] = 0
+    payload["limits"] = limits
+
+    return payload
 
 
 def _extract_json_block(text: str) -> dict | None:
@@ -477,15 +554,61 @@ def _get_request_hints(run: ChatRun) -> dict:
     return request_hints if isinstance(request_hints, dict) else {}
 
 
-def _set_run_progress(run: ChatRun, *, label: str, preview: str = "") -> None:
+def _set_run_progress(
+    run: ChatRun,
+    *,
+    label: str,
+    preview: str = "",
+) -> None:
     current = run.provider_execution or {}
+
+    if not isinstance(current, dict):
+        current = {}
+
+    updated_at = timezone.now().isoformat()
+    normalized_label = str(label or "").strip()[:240]
+    normalized_preview = str(preview or "").strip()[:2000]
+
     current["ui_progress"] = {
-        "label": label,
-        "preview": preview,
-        "updated_at": timezone.now().isoformat(),
+        "label": normalized_label,
+        "preview": normalized_preview,
+        "updated_at": updated_at,
     }
+
+    history = current.get(
+        "ui_progress_history"
+    ) or []
+
+    if not isinstance(history, list):
+        history = []
+
+    last_label = ""
+
+    if history and isinstance(history[-1], dict):
+        last_label = str(
+            history[-1].get("label") or ""
+        ).strip()
+
+    if (
+        normalized_label
+        and normalized_label != last_label
+    ):
+        history.append(
+            {
+                "label": normalized_label,
+                "updated_at": updated_at,
+            }
+        )
+
+    current["ui_progress_history"] = history[-20:]
     run.provider_execution = current
-    run.save(update_fields=["provider_execution", "updated_at"])
+
+    run.save(
+        update_fields=[
+            "provider_execution",
+            "updated_at",
+        ]
+    )
 
 
 def _refresh_run_or_raise_cancelled(run: ChatRun) -> ChatRun:
@@ -578,7 +701,24 @@ def _wait_for_action_completion(run: ChatRun, action: ChatActionRun) -> ChatActi
         action = refresh_chat_action_run(action)
         action.refresh_from_db()
 
-        if action.status in {"completed", "failed", "cancelled"}:
+        if action.status == "running":
+            _set_run_progress(
+                run,
+                label=(
+                    "Investigation in progress: "
+                    f"{action.template.name}"
+                ),
+                preview=(
+                    "SOAR status: "
+                    f"{action.remote_status or 'running'}"
+                ),
+            )
+
+        if action.status in {
+            "completed",
+            "failed",
+            "cancelled",
+        }:
             break
 
     return action
@@ -1090,6 +1230,61 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
 
         run = _refresh_run_or_raise_cancelled(run)
 
+        read_plan = {
+            "operation": "none",
+        }
+
+        read_result = None
+
+        if (
+            template is None
+            and not explicit_template_code
+            and not explicit_chat_command
+        ):
+            try:
+                _set_run_progress(
+                    run,
+                    label="Checking Doko data…",
+                )
+
+                read_plan = plan_chat_read_operation(
+                    run=run,
+                    history=conversation_history,
+                )
+
+                if read_plan.get("operation") != "none":
+                    _set_run_progress(
+                        run,
+                        label="Searching Doko…",
+                    )
+
+                    read_result = execute_chat_read_operation(
+                        user=run.user,
+                        plan=read_plan,
+                        customer_id=(
+                            run.session.customer_id
+                            or None
+                        ),
+                    )
+            except Exception:
+                logger.exception(
+                    "Doko read-only chat operation failed"
+                )
+
+                read_plan = {
+                    "operation": "error",
+                }
+
+                read_result = {
+                    "operation": "error",
+                    "message": (
+                        "The exact Doko database result "
+                        "could not be retrieved."
+                    ),
+                }
+
+        run = _refresh_run_or_raise_cancelled(run)
+
         if template and action and action.status == "running":
             answer = (
                 "The investigation has been launched successfully.\n\n"
@@ -1135,16 +1330,42 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
             )
 
         else:
-            _set_run_progress(run, label="Generating response…")
+            _set_run_progress(
+                run,
+                label="Generating response…",
+            )
+
             service = LLMService(run.provider)
-            action_context = "\n\nNo investigation template was executed.\nRespond normally.\n"
+
+            answer_context = _context_for_answer(
+                run.snapshot.context_payload,
+                read_result,
+            )
+
+            action_context = (
+                "\n\nNo investigation template "
+                "was executed.\nRespond normally.\n"
+            )
+
+            read_context = format_chat_read_context(
+                read_plan,
+                read_result,
+            )
+
             answer = service.generate(
-                system_prompt=_build_system_prompt(run.provider, template),
-                user_prompt=_format_prompt(
-                    run.snapshot.context_payload,
-                    run.prompt,
-                    conversation_history,
-                ) + action_context,
+                system_prompt=_build_system_prompt(
+                    run.provider,
+                    template,
+                ),
+                user_prompt=(
+                    _format_prompt(
+                        answer_context,
+                        run.prompt,
+                        conversation_history,
+                    )
+                    + action_context
+                    + read_context
+                ),
             )
             _set_run_progress(
                 run,
@@ -1152,16 +1373,29 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
                 preview=(getattr(service, "last_response_preview", "") or strip_tags(answer or ""))[:2000],
             )
 
+        run = _refresh_run_or_raise_cancelled(run)
+
         run.response_text = answer
         run.status = "completed"
         run.completed_at = timezone.now()
         run.save(update_fields=["response_text", "status", "completed_at", "updated_at"])
 
+        message_metadata = {
+            "run_id": str(run.id),
+            "message_kind": "chat_response",
+        }
+
+        if read_plan.get("operation") in {
+            "search",
+            "query",
+        }:
+            message_metadata["read_operation"] = read_plan
+
         ChatMessage.objects.create(
             session=run.session,
             role="assistant",
             content=answer,
-            metadata={"run_id": str(run.id)},
+            metadata=message_metadata,
         )
 
         _set_run_progress(run, label="Completed", preview=strip_tags(answer or "")[:2000])
