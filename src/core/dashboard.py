@@ -153,6 +153,60 @@ def _allowed_customer_ids_for_any_perm(user, perm_codes: list[str]):
     return allowed
 
 
+def _build_dashboard_querysets(user, customer_id: str | None = None):
+    requested_customer_id = str(customer_id or "").strip() or None
+
+    allowed_case_customers = _allowed_customer_ids_for_perm(user, "case.view")
+    allowed_alert_customers = _allowed_customer_ids_for_perm(user, "alert.view")
+    allowed_hunt_customers = _allowed_customer_ids_for_any_perm(
+        user,
+        ["hunt.view"],
+    )
+
+    if requested_customer_id and not user.is_staff:
+        accessible = set(
+            str(x)
+            for x in (get_accessible_customer_ids(user) or [])
+        )
+
+        if requested_customer_id not in accessible:
+            raise PermissionDenied("Customer not accessible.")
+
+    events = Event.objects.filter(is_deleted=False)
+    alerts = Alert.objects.filter(is_deleted=False)
+    hunts = Hunt.objects.filter(is_deleted=False)
+
+    if not user.is_staff:
+        events = (
+            events.filter(customer_id__in=allowed_case_customers)
+            if allowed_case_customers
+            else events.none()
+        )
+        alerts = (
+            alerts.filter(customer_id__in=allowed_alert_customers)
+            if allowed_alert_customers
+            else alerts.none()
+        )
+        hunts = (
+            hunts.filter(customer_id__in=allowed_hunt_customers)
+            if allowed_hunt_customers
+            else hunts.none()
+        )
+
+    if requested_customer_id:
+        events = events.filter(customer_id=requested_customer_id)
+        alerts = alerts.filter(customer_id=requested_customer_id)
+        hunts = hunts.filter(customer_id=requested_customer_id)
+
+    return {
+        "events": events,
+        "alerts": alerts,
+        "hunts": hunts,
+        "allowed_case_customers": allowed_case_customers,
+        "allowed_alert_customers": allowed_alert_customers,
+        "allowed_hunt_customers": allowed_hunt_customers,
+    }
+
 
 def _parse_day_or_none(raw: str | None):
     if not raw:
@@ -373,28 +427,14 @@ def dashboard(request):
     user = request.user
     customer_id = (request.query_params.get("customer") or "").strip() or None
 
-    allowed_case_customers = _allowed_customer_ids_for_perm(user, "case.view")
-    allowed_alert_customers = _allowed_customer_ids_for_perm(user, "alert.view")
-    allowed_hunt_customers = _allowed_customer_ids_for_any_perm(user, ["hunt.view"])
+    scoped = _build_dashboard_querysets(user, customer_id)
 
-    if customer_id and not user.is_staff:
-        accessible = set(str(x) for x in (get_accessible_customer_ids(user) or []))
-        if customer_id not in accessible:
-            raise PermissionDenied("Customer not accessible.")
-
-    events = Event.objects.filter(is_deleted=False)
-    alerts = Alert.objects.filter(is_deleted=False)
-    hunts = Hunt.objects.filter(is_deleted=False)
-
-    if not user.is_staff:
-        events = events.filter(customer_id__in=allowed_case_customers) if allowed_case_customers else events.none()
-        alerts = alerts.filter(customer_id__in=allowed_alert_customers) if allowed_alert_customers else alerts.none()
-        hunts = hunts.filter(customer_id__in=allowed_hunt_customers) if allowed_hunt_customers else hunts.none()
-
-    if customer_id:
-        events = events.filter(customer_id=customer_id)
-        alerts = alerts.filter(customer_id=customer_id)
-        hunts = hunts.filter(customer_id=customer_id)
+    events = scoped["events"]
+    alerts = scoped["alerts"]
+    hunts = scoped["hunts"]
+    allowed_case_customers = scoped["allowed_case_customers"]
+    allowed_alert_customers = scoped["allowed_alert_customers"]
+    allowed_hunt_customers = scoped["allowed_hunt_customers"]
 
     scope = _resolve_period(request, events, alerts, hunts)
     start = scope["start"]

@@ -3,7 +3,8 @@ from html import unescape
 import re
 from datetime import datetime
 
-from django.db.models import Q
+from django.db.models import Q, TextField
+from django.db.models.functions import Cast
 
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import IsAuthenticated
@@ -49,6 +50,19 @@ def _normalize_query(raw: str | None) -> str:
     if len(value) > SEARCH_MAX_LEN:
         value = value[:SEARCH_MAX_LEN]
     return value
+
+
+def _exact_token_regex(value: str) -> str:
+    continuation = (
+        "A-Za-z0-9_.-"
+        + (":" if ":" in value else "")
+    )
+
+    return (
+        rf"(^|[^{continuation}])"
+        rf"{re.escape(value)}"
+        rf"([^{continuation}]|$)"
+    )
 
 
 def _allowed_customer_ids_for_perm(user, perm_code: str):
@@ -121,6 +135,7 @@ def _result(
     customer_name: str = "",
     updated_at=None,
     parent: dict[str, Any] | None = None,
+    details: dict[str, Any] | None = None,
 ):
     return {
         "type": result_type,
@@ -131,24 +146,57 @@ def _result(
         "customer_name": customer_name or "",
         "updated_at": updated_at.isoformat() if updated_at else None,
         "parent": parent,
+        "details": details or {},
     }
 
 class SearchThrottle(UserRateThrottle):
     rate = "30/min"
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-@throttle_classes([SearchThrottle])
-def unified_search(request):
-    user = request.user
-    q = _normalize_query(request.query_params.get("q"))
+def build_unified_search_results(
+    *,
+    user,
+    raw_query: str | None,
+    per_type_limit: int = PER_TYPE_LIMIT,
+    max_results: int = 120,
+    customer_id: str | None = None,
+    strict_observable_match: bool = False,
+) -> dict:
+    q = _normalize_query(raw_query)
+    per_type_limit = max(1, min(int(per_type_limit or PER_TYPE_LIMIT), 50))
+    max_results = max(1, min(int(max_results or 120), 200))
 
     if len(q) < SEARCH_MIN_LEN:
-        raise ValidationError(f"Search query must contain at least {SEARCH_MIN_LEN} characters.")
+        raise ValidationError(
+            f"Search query must contain at least {SEARCH_MIN_LEN} characters."
+        )
 
     allowed_case_customers = _allowed_customer_ids_for_perm(user, "case.view")
     allowed_alert_customers = _allowed_customer_ids_for_perm(user, "alert.view")
     allowed_hunt_customers = _allowed_customer_ids_for_perm(user, "hunt.view")
+
+    requested_customer_id = str(customer_id or "").strip() or None
+
+    if requested_customer_id:
+        if user.is_staff:
+            allowed_case_customers = [requested_customer_id]
+            allowed_alert_customers = [requested_customer_id]
+            allowed_hunt_customers = [requested_customer_id]
+        else:
+            allowed_case_customers = (
+                [requested_customer_id]
+                if requested_customer_id in (allowed_case_customers or [])
+                else []
+            )
+            allowed_alert_customers = (
+                [requested_customer_id]
+                if requested_customer_id in (allowed_alert_customers or [])
+                else []
+            )
+            allowed_hunt_customers = (
+                [requested_customer_id]
+                if requested_customer_id in (allowed_hunt_customers or [])
+                else []
+            )
 
     results: list[dict[str, Any]] = []
 
@@ -160,13 +208,26 @@ def unified_search(request):
     alert_qs = _apply_customer_scope(alert_qs, allowed_alert_customers)
     hunt_qs = _apply_customer_scope(hunt_qs, allowed_hunt_customers)
 
-    cases = (
-        case_qs.filter(
+    exact_pattern = (
+        _exact_token_regex(q)
+        if strict_observable_match
+        else ""
+    )
+
+    case_filter = (
+        Q(title__iregex=exact_pattern)
+        | Q(description__iregex=exact_pattern)
+        if strict_observable_match
+        else (
             Q(title__icontains=q)
             | Q(description__icontains=q)
         )
+    )
+
+    cases = (
+        case_qs.filter(case_filter)
         .select_related("customer")
-        .order_by("-updated_at")[:PER_TYPE_LIMIT]
+        .order_by("-updated_at")[:per_type_limit]
     )
 
     for item in cases:
@@ -179,19 +240,48 @@ def unified_search(request):
                 url=f"/cases/{item.id}",
                 customer_name=item.customer.name if item.customer else "",
                 updated_at=item.updated_at,
+                details={
+                    "case_number": item.case_number,
+                    "status": item.status,
+                    "severity": item.severity,
+                    "classification": item.classification,
+                    "outcome": item.outcome,
+                },
             )
         )
 
-    alerts = (
-        alert_qs.filter(
-            Q(title__icontains=q)
-            | Q(description__icontains=q)
-            | Q(iocs__icontains=q)
-            | Q(assets__icontains=q)
+    if strict_observable_match:
+        alerts = (
+            alert_qs.annotate(
+                iocs_text=Cast(
+                    "iocs",
+                    output_field=TextField(),
+                ),
+                assets_text=Cast(
+                    "assets",
+                    output_field=TextField(),
+                ),
+            )
+            .filter(
+                Q(title__iregex=exact_pattern)
+                | Q(description__iregex=exact_pattern)
+                | Q(iocs_text__iregex=exact_pattern)
+                | Q(assets_text__iregex=exact_pattern)
+            )
+            .select_related("customer", "case")
+            .order_by("-updated_at")[:per_type_limit]
         )
-        .select_related("customer", "case")
-        .order_by("-updated_at")[:PER_TYPE_LIMIT]
-    )
+    else:
+        alerts = (
+            alert_qs.filter(
+                Q(title__icontains=q)
+                | Q(description__icontains=q)
+                | Q(iocs__icontains=q)
+                | Q(assets__icontains=q)
+            )
+            .select_related("customer", "case")
+            .order_by("-updated_at")[:per_type_limit]
+        )
 
     for item in alerts:
         results.append(
@@ -208,24 +298,73 @@ def unified_search(request):
                     if item.case_id
                     else None
                 ),
+                details={
+                    "status": item.status,
+                    "severity": item.severity,
+                    "classification": item.classification,
+                    "outcome": item.outcome,
+                    "source": item.source,
+                    "case_number": (
+                        item.case.case_number
+                        if item.case_id and item.case
+                        else None
+                    ),
+                },
             )
         )
 
-    hunts = (
-        hunt_qs.filter(
-            Q(title__icontains=q)
-            | Q(context__icontains=q)
-            | Q(conclusion__icontains=q)
-            | Q(iocs__icontains=q)
-            | Q(assets__icontains=q)
-            | Q(journal_entries__text__icontains=q)
-            | Q(journal_entries__linked_ioc_value__icontains=q)
-            | Q(journal_entries__linked_asset_value__icontains=q)
+    if strict_observable_match:
+        hunts = (
+            hunt_qs.annotate(
+                iocs_text=Cast(
+                    "iocs",
+                    output_field=TextField(),
+                ),
+                assets_text=Cast(
+                    "assets",
+                    output_field=TextField(),
+                ),
+            )
+            .filter(
+                Q(title__iregex=exact_pattern)
+                | Q(context__iregex=exact_pattern)
+                | Q(conclusion__iregex=exact_pattern)
+                | Q(iocs_text__iregex=exact_pattern)
+                | Q(assets_text__iregex=exact_pattern)
+                | Q(journal_entries__text__iregex=exact_pattern)
+                | Q(
+                    journal_entries__linked_ioc_value__iregex=
+                    exact_pattern
+                )
+                | Q(
+                    journal_entries__linked_asset_value__iregex=
+                    exact_pattern
+                )
+            )
+            .select_related("customer")
+            .distinct()
+            .order_by("-updated_at")[:per_type_limit]
         )
-        .select_related("customer")
-        .distinct()
-        .order_by("-updated_at")[:PER_TYPE_LIMIT]
-    )
+    else:
+        hunts = (
+            hunt_qs.filter(
+                Q(title__icontains=q)
+                | Q(context__icontains=q)
+                | Q(conclusion__icontains=q)
+                | Q(iocs__icontains=q)
+                | Q(assets__icontains=q)
+                | Q(journal_entries__text__icontains=q)
+                | Q(
+                    journal_entries__linked_ioc_value__icontains=q
+                )
+                | Q(
+                    journal_entries__linked_asset_value__icontains=q
+                )
+            )
+            .select_related("customer")
+            .distinct()
+            .order_by("-updated_at")[:per_type_limit]
+        )
 
     for item in hunts:
         hunt_text = " ".join(
@@ -240,20 +379,30 @@ def unified_search(request):
                 url=f"/hunts/{item.id}",
                 customer_name=item.customer.name if item.customer else "",
                 updated_at=item.updated_at,
+                details={
+                    "status": item.status,
+                    "verdict": item.verdict,
+                },
             )
         )
 
+    case_comment_filter = (
+        Q(text__iregex=exact_pattern)
+        if strict_observable_match
+        else Q(text__icontains=q)
+    )
+
     case_comments = (
         Comment.objects.filter(
+            case_comment_filter,
             event__is_deleted=False,
-            text__icontains=q,
         )
         .select_related("event", "event__customer", "author")
         .order_by("-updated_at")
     )
     if allowed_case_customers is not None:
         case_comments = case_comments.filter(event__customer_id__in=allowed_case_customers)
-    case_comments = case_comments[:PER_TYPE_LIMIT]
+    case_comments = case_comments[:per_type_limit]
 
     for item in case_comments:
         results.append(
@@ -269,17 +418,23 @@ def unified_search(request):
             )
         )
 
+    alert_comment_filter = (
+        Q(text__iregex=exact_pattern)
+        if strict_observable_match
+        else Q(text__icontains=q)
+    )
+
     alert_comments = (
         AlertComment.objects.filter(
+            alert_comment_filter,
             alert__is_deleted=False,
-            text__icontains=q,
         )
         .select_related("alert", "alert__customer", "author")
         .order_by("-updated_at")
     )
     if allowed_alert_customers is not None:
         alert_comments = alert_comments.filter(alert__customer_id__in=allowed_alert_customers)
-    alert_comments = alert_comments[:PER_TYPE_LIMIT]
+    alert_comments = alert_comments[:per_type_limit]
 
     for item in alert_comments:
         results.append(
@@ -295,11 +450,23 @@ def unified_search(request):
             )
         )
 
-    hunt_notes = (
-        HuntJournalEntry.objects.filter(
+    hunt_note_filter = (
+        (
+            Q(text__iregex=exact_pattern)
+            | Q(linked_ioc_value__iregex=exact_pattern)
+            | Q(linked_asset_value__iregex=exact_pattern)
+        )
+        if strict_observable_match
+        else (
             Q(text__icontains=q)
             | Q(linked_ioc_value__icontains=q)
-            | Q(linked_asset_value__icontains=q),
+            | Q(linked_asset_value__icontains=q)
+        )
+    )
+
+    hunt_notes = (
+        HuntJournalEntry.objects.filter(
+            hunt_note_filter,
             hunt__is_deleted=False,
         )
         .select_related("hunt", "hunt__customer", "author")
@@ -307,7 +474,7 @@ def unified_search(request):
     )
     if allowed_hunt_customers is not None:
         hunt_notes = hunt_notes.filter(hunt__customer_id__in=allowed_hunt_customers)
-    hunt_notes = hunt_notes[:PER_TYPE_LIMIT]
+    hunt_notes = hunt_notes[:per_type_limit]
 
     for item in hunt_notes:
         results.append(
@@ -328,14 +495,30 @@ def unified_search(request):
             )
         )
 
-    ioc_results = (
-        case_qs.filter(
-            Q(iocs__icontains=q)
+    if strict_observable_match:
+        ioc_results = (
+            case_qs.annotate(
+                iocs_text=Cast(
+                    "iocs",
+                    output_field=TextField(),
+                )
+            )
+            .filter(
+                iocs_text__iregex=exact_pattern
+            )
+            .distinct()
+            .select_related("customer")
+            .order_by("-updated_at")[:per_type_limit]
         )
-        .distinct()
-        .select_related("customer")
-        .order_by("-updated_at")[:PER_TYPE_LIMIT]
-    )
+    else:
+        ioc_results = (
+            case_qs.filter(
+                iocs__icontains=q
+            )
+            .distinct()
+            .select_related("customer")
+            .order_by("-updated_at")[:per_type_limit]
+        )
 
     for item in ioc_results:
         results.append(
@@ -351,14 +534,30 @@ def unified_search(request):
             )
         )
 
-    asset_results = (
-        case_qs.filter(
-            Q(assets__icontains=q)
+    if strict_observable_match:
+        asset_results = (
+            case_qs.annotate(
+                assets_text=Cast(
+                    "assets",
+                    output_field=TextField(),
+                )
+            )
+            .filter(
+                assets_text__iregex=exact_pattern
+            )
+            .distinct()
+            .select_related("customer")
+            .order_by("-updated_at")[:per_type_limit]
         )
-        .distinct()
-        .select_related("customer")
-        .order_by("-updated_at")[:PER_TYPE_LIMIT]
-    )
+    else:
+        asset_results = (
+            case_qs.filter(
+                assets__icontains=q
+            )
+            .distinct()
+            .select_related("customer")
+            .order_by("-updated_at")[:per_type_limit]
+        )
 
     for item in asset_results:
         results.append(
@@ -392,10 +591,24 @@ def unified_search(request):
         )
     )
 
+    return {
+        "query": q,
+        "count": len(results),
+        "results": results[:max_results],
+        "limited": len(results) > max_results,
+    }
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([SearchThrottle])
+def unified_search(request):
     return Response(
-        {
-            "query": q,
-            "count": len(results),
-            "results": results[:120],
-        }
+        build_unified_search_results(
+            user=request.user,
+            raw_query=request.query_params.get("q"),
+            per_type_limit=PER_TYPE_LIMIT,
+            max_results=120,
+            customer_id=request.query_params.get("customer"),
+        )
     )

@@ -14,7 +14,7 @@ import {
   listChatActions,
   generateDraft,
   postDraft,
-  archiveChatSession,
+  clearChatSession,
 } from "../../api/chat";
 import { getClientTabId, makeRequestId } from "../../auth/clientTab";
 import {
@@ -456,21 +456,19 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
     if (!activeSession) return;
 
     setClearing(true);
+
     try {
-      await archiveChatSession(activeSession.id);
-
-      const created = await createChatSession({
-        title: "Assistant",
-        surface: "contextual",
-        page_type: pageType === "global" ? undefined : pageType,
-        object_id: objectId,
-        client_tab_id: clientTabId,
-      });
-
-      setSessions((prev) => [
+      const previousSessionId = activeSession.id;
+      const created = await clearChatSession(
+        previousSessionId
+      );
+      setSessions((previous) => [
         created,
-        ...prev.filter((x) => x.id !== activeSession.id),
+        ...previous.filter(
+          (session) => session.id !== previousSessionId
+        ),
       ]);
+
       setActiveSession(created);
       setRun(null);
       setPrompt("");
@@ -484,7 +482,9 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
       toast.push({
         kind: "error",
         title: "Assistant",
-        message: e?.message || "Unable to clear conversation",
+        message:
+          e?.message ||
+          "Unable to clear conversation",
       });
     } finally {
       setClearing(false);

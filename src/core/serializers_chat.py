@@ -479,21 +479,23 @@ class ChatGeneratedDraftSerializer(serializers.ModelSerializer):
 
 
 class ChatActionRunSerializer(serializers.ModelSerializer):
-    template_name = serializers.CharField(source="template.name", read_only=True)
-    template_code = serializers.CharField(source="template.code", read_only=True)
+    template_name = serializers.CharField(
+        source="template.name",
+        read_only=True,
+    )
+
+    template_code = serializers.CharField(
+        source="template.code",
+        read_only=True,
+    )
 
     class Meta:
         model = ChatActionRun
         fields = [
             "id",
             "status",
-            "template",
             "template_name",
             "template_code",
-            "input_payload",
-            "request_payload",
-            "output_payload",
-            "raw_response_payload",
             "remote_run_id",
             "remote_status",
             "error_message",
@@ -505,8 +507,112 @@ class ChatActionRunSerializer(serializers.ModelSerializer):
 
 
 class ChatRunSerializer(serializers.ModelSerializer):
-    drafts = ChatGeneratedDraftSerializer(many=True, read_only=True)
-    actions = ChatActionRunSerializer(many=True, read_only=True)
+    drafts = ChatGeneratedDraftSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    actions = ChatActionRunSerializer(
+        many=True,
+        read_only=True,
+    )
+
+    progress = serializers.SerializerMethodField()
+    provider_execution = serializers.SerializerMethodField()
+
+    def get_progress(self, instance):
+        provider_execution = (
+            instance.provider_execution or {}
+        )
+
+        if not isinstance(provider_execution, dict):
+            return {}
+
+        raw_progress = (
+            provider_execution.get("ui_progress")
+            or {}
+        )
+
+        raw_steps = (
+            provider_execution.get(
+                "ui_progress_history"
+            )
+            or []
+        )
+
+        progress = {}
+
+        if isinstance(raw_progress, dict):
+            label = str(
+                raw_progress.get("label") or ""
+            ).strip()
+
+            preview = str(
+                raw_progress.get("preview") or ""
+            ).strip()
+
+            updated_at = str(
+                raw_progress.get("updated_at") or ""
+            ).strip()
+
+            if label:
+                progress["label"] = label[:240]
+
+            if preview:
+                progress["preview"] = preview[:2000]
+
+            if updated_at:
+                progress["updated_at"] = updated_at[:64]
+
+        steps = []
+
+        if isinstance(raw_steps, list):
+            for raw_step in raw_steps[-20:]:
+                if not isinstance(raw_step, dict):
+                    continue
+
+                label = str(
+                    raw_step.get("label") or ""
+                ).strip()
+
+                updated_at = str(
+                    raw_step.get("updated_at") or ""
+                ).strip()
+
+                if not label:
+                    continue
+
+                step = {
+                    "label": label[:240],
+                }
+
+                if updated_at:
+                    step["updated_at"] = updated_at[:64]
+
+                steps.append(step)
+
+        if steps:
+            progress["steps"] = steps
+
+        return progress
+
+    def get_provider_execution(self, instance):
+        progress = self.get_progress(instance)
+
+        payload = {
+            "ui_progress": {
+                key: value
+                for key, value in progress.items()
+                if key != "steps"
+            }
+        }
+
+        if progress.get("steps"):
+            payload["ui_progress_history"] = (
+                progress["steps"]
+            )
+
+        return payload
 
     class Meta:
         model = ChatRun
@@ -520,6 +626,7 @@ class ChatRunSerializer(serializers.ModelSerializer):
             "error_message",
             "selected_template_code",
             "selected_command",
+            "progress",
             "provider_execution",
             "cancel_requested",
             "cancel_requested_at",
