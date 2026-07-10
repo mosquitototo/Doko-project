@@ -3,6 +3,11 @@ from celery.schedules import crontab
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+CELERY_TASK_PUBLISH_RETRY = False
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "socket_connect_timeout": 3,
+    "socket_timeout": 5,
+}
 CELERY_TIMEZONE = "Europe/Paris"
 
 CELERY_BEAT_SCHEDULE = {

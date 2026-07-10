@@ -42,8 +42,6 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
       CONNECTOR_HUB_URL: "http://connector_hub:8080"
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
@@ -70,8 +68,6 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
     volumes:
@@ -94,8 +90,6 @@ services:
     env_file:
       - .env
     environment:
-      DB_HOST: db
-      DB_PORT: 5432
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
     volumes:
