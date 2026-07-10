@@ -516,8 +516,20 @@ def queue_audit_log_splunk_hec_export(sender, instance: AuditLog, created: bool,
 
     def enqueue():
         try:
+            enabled = InstanceSplunkHecSettings.objects.filter(
+                id=1,
+                enabled=True,
+            ).exists()
+
+            if not enabled:
+                return
+
             from .celerytasks import send_audit_log_to_splunk_hec_task
-            send_audit_log_to_splunk_hec_task.delay(audit_log_id)
+
+            send_audit_log_to_splunk_hec_task.apply_async(
+                args=[audit_log_id],
+                retry=False,
+            )
         except Exception:
             pass
 

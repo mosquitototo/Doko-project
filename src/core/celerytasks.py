@@ -7,7 +7,20 @@ from django.db.models import F
 from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
-from .models import Event, Alert, Hunt, TimelineItem, CaseRetentionSettings, Attachment, AuditLog, ChatRun, CaseExchange, CaseExchangeReplyQuickpart, CaseExchangeFollowup
+from .models import (
+    Event,
+    Alert,
+    Hunt,
+    TimelineItem,
+    CaseRetentionSettings,
+    AuditLogRetentionSettings,
+    Attachment,
+    AuditLog,
+    ChatRun,
+    CaseExchange,
+    CaseExchangeReplyQuickpart,
+    CaseExchangeFollowup,
+)
 from .services_chat import execute_chat_run
 from .audit import audit_event
 
@@ -58,7 +71,7 @@ def auto_archive_cases() -> dict:
         if case_ids:
             Event.objects.filter(id__in=case_ids, archived_at__isnull=True).update(
                 archived_at=now,
-                status="closed",
+                status=Event.Status.ARCHIVED,
             )
 
             TimelineItem.objects.bulk_create([
@@ -103,18 +116,14 @@ def hard_delete_cases() -> dict:
         .values_list("id", flat=True)[:2000]
     )
 
-    case_archived_qs = (
+    case_archived_ids = list(
         Event.objects
-        .filter(is_deleted=False, archived_at__isnull=False)
-        .annotate(
-            last_activity=Greatest(
-                F("updated_at"),
-                Coalesce(F("unarchived_at"), F("updated_at")),
-            )
+        .filter(
+            is_deleted=False,
+            archived_at__lte=cutoff,
         )
-        .filter(last_activity__lte=cutoff)
+        .values_list("id", flat=True)[:2000]
     )
-    case_archived_ids = list(case_archived_qs.values_list("id", flat=True)[:2000])
 
     case_ids = list(dict.fromkeys([*case_soft_ids, *case_archived_ids]))
 
@@ -132,7 +141,10 @@ def hard_delete_cases() -> dict:
 
     hunt_archived_ids = list(
         Hunt.objects
-        .filter(is_deleted=False, archived_at__isnull=False, updated_at__lte=cutoff)
+        .filter(
+            is_deleted=False,
+            archived_at__lte=cutoff,
+        )
         .values_list("id", flat=True)[:2000]
     )
 
@@ -144,18 +156,6 @@ def hard_delete_cases() -> dict:
     with transaction.atomic():
         if case_ids:
             Attachment.objects.filter(event_id__in=case_ids).delete()
-
-            TimelineItem.objects.bulk_create([
-                TimelineItem(
-                    event_id=eid,
-                    date=now.date(),
-                    type="case_deleted",
-                    text=f"Case auto-deleted after {days} day(s)",
-                    actor=None,
-                )
-                for eid in case_ids
-            ])
-
             Event.objects.filter(id__in=case_ids).delete()
 
         if alert_ids:
@@ -178,14 +178,13 @@ def hard_delete_cases() -> dict:
 
 @shared_task
 def purge_audit_logs() -> dict:
-    s, _ = CaseRetentionSettings.objects.get_or_create(id=1)
+    settings_obj = AuditLogRetentionSettings.get_solo()
 
-    days = int(s.auto_archive_after_days or 0)
+    days = int(settings_obj.max_days or 0)
     if days <= 0:
         return {"deleted": 0, "days": days, "disabled": True}
 
-    now = timezone.now()
-    cutoff = now - timezone.timedelta(days=days)
+    cutoff = timezone.now() - timezone.timedelta(days=days)
 
     ids = list(
         AuditLog.objects

@@ -44,7 +44,7 @@ export async function logout(): Promise<void> {
 }
 
 export type ApiTokenPayload = {
-  id: number;
+  id: string;
   token: string;
   token_key: string;
   created: string;
@@ -69,7 +69,7 @@ export async function createApiToken(): Promise<ApiTokenPayload> {
 
 export async function listApiTokens(): Promise<
   Array<{
-    id: number;
+    id: string;
     token_key: string;
     created: string;
     expiry: string | null;
@@ -79,11 +79,11 @@ export async function listApiTokens(): Promise<
   return r.data;
 }
 
-export async function revokeApiToken(id: number): Promise<void> {
+export async function revokeApiToken(tokenKey: string): Promise<void> {
   const csrfToken = await ensureCsrf();
 
   await api.post(
-    `/api/auth/api-tokens/${id}/revoke/`,
+    `/api/auth/api-tokens/${encodeURIComponent(tokenKey)}/revoke/`,
     {},
     {
       headers: {
