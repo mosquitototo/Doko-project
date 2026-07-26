@@ -1,9 +1,8 @@
-from datetime import date
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 
-from core.models import Event, TimelineItem, Comment, Attachment
+from core.models import Event, TimelineItem, Comment
 
 User = get_user_model()
 

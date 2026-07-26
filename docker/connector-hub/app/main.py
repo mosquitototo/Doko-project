@@ -1,31 +1,17 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
-from typing import Any, Literal, Optional
+from typing import Any
 from urllib.parse import urlparse
 import ipaddress
 import socket
 import httpx
 import hashlib
 import hmac
-import json
 import os
 import time
 
 
 app = FastAPI(title="Doko Connector Hub")
-
-class Target(BaseModel):
-    key: str
-    value: str
-
-
-class RunRequest(BaseModel):
-    run_id: str
-    actor: dict[str, Any]
-    case: dict[str, Any]
-    target_type: Literal["case", "ioc", "asset"]
-    targets: list[Target]
-    context: dict[str, Any] = {}
 
 
 @app.get("/health")

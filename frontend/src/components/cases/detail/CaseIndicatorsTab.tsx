@@ -8,19 +8,16 @@ import type { EventDetail } from "../../../api/caseDetail";
 import type { EnrichmentLite, KVRow } from "./types";
 import {
   ASSET_STATUS_OPTIONS,
-  flattenForTable,
   formatDate,
   getHistoryBundle,
   IOC_STATUS_OPTIONS,
   rowId,
-  safeJsonStringify,
 } from "./utils";
 
 
 type Props = {
   tab: "iocs" | "assets" | string;
   ticketId: string;
-  event: EventDetail;
   iocs: KVRow[];
   assets: KVRow[];
   busy: boolean;
@@ -43,8 +40,6 @@ type Props = {
   setDrawerOpen: React.Dispatch<React.SetStateAction<boolean>>;
   instancesBusy: boolean;
   openHistoryDrawer: (mode: "ioc" | "asset", k: string, v: string) => void;
-  actionRaw: Record<string, boolean>;
-  setActionRaw: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setEvent: React.Dispatch<React.SetStateAction<EventDetail | null>>;
 };
@@ -144,78 +139,6 @@ function SelectionBar(props: {
   );
 }
 
-function ActionDetails(props: {
-  action: EnrichmentLite;
-  actionRaw: Record<string, boolean>;
-  setActionRaw: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
-}) {
-  const aid = String(props.action.id || "");
-  const raw = !!props.actionRaw[aid];
-  const tableRows = flattenForTable(props.action.response_payload);
-
-  return (
-    <div className="mt-3 rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold text-foreground">
-            Action {props.action.action_id ? String(props.action.action_id) : "—"} • {formatDate(props.action.created_at)}
-          </div>
-          <div className="mt-1 truncate text-xs text-muted-foreground">
-            {props.action.status === "error" ? "Error" : "Success"} • {props.action.summary || "—"}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          className="rounded-xl border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-accent"
-          onClick={() => props.setActionRaw((prev) => ({ ...prev, [aid]: !prev[aid] }))}
-        >
-          {raw ? "Parsed view" : "Raw JSON"}
-        </button>
-      </div>
-
-      {props.action.status === "error" ? (
-        <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-900 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200">
-          <div className="font-semibold">Error</div>
-          <div className="mt-1 whitespace-pre-wrap break-words text-xs">{String(props.action.error || "Unknown error")}</div>
-        </div>
-      ) : null}
-
-      {raw ? (
-        <pre className="mt-3 max-h-[360px] overflow-auto rounded-2xl border border-border bg-background p-3 text-[11px] leading-snug text-foreground">
-          {safeJsonStringify(props.action.response_payload)}
-        </pre>
-      ) : (
-        <div className="mt-3">
-          <div className="max-h-[360px] overflow-auto rounded-2xl border border-border bg-background">
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-card">
-                <tr className="border-b border-border">
-                  <th className="w-[45%] p-3 text-left font-semibold text-muted-foreground">Key</th>
-                  <th className="p-3 text-left font-semibold text-muted-foreground">Value</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tableRows.length === 0 ? (
-                  <tr>
-                    <td className="p-3 text-muted-foreground" colSpan={2}>No data</td>
-                  </tr>
-                ) : (
-                  tableRows.map((r, idx) => (
-                    <tr key={`${r.key}-${idx}`} className="border-b border-border last:border-b-0">
-                      <td className="p-3 align-top break-words text-foreground">{r.key}</td>
-                      <td className="whitespace-pre-wrap break-words p-3 text-foreground">{r.value}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function CaseIndicatorsTab(props: Props) {
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);

@@ -8,7 +8,7 @@ import {
   runConnectorAction,
   type ConnectorTargetType,
   type ConnectorTarget,
-  type ConnectorInstance,
+  type RunnableConnectorInstance,
 } from "../../api/connectors";
 
 
@@ -191,7 +191,7 @@ export default function ConnectorRunnerDrawer(props: {
   caseId: string;
   targetType: ConnectorTargetType;
   targets: ConnectorTarget[];
-  instances: ConnectorInstance[];
+  instances: RunnableConnectorInstance[];
 }) {
   const { push } = useToast();
   const { open, onClose, caseId, targetType, targets, instances } = props;
@@ -359,7 +359,6 @@ export default function ConnectorRunnerDrawer(props: {
         endpoint_id: selected.endpoint_id,
         target_type: targetType,
         targets: normalizedTargets,
-        context: {},
       });
 
       if (resp.status === "success") {

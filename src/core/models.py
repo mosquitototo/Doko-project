@@ -872,63 +872,23 @@ class IncidentTimelineItem(models.Model):
         return f"{self.case_id} - {self.occurred_at} - {self.title}"
 
 
-class Addon(models.Model):
-    id = models.CharField(primary_key=True, max_length=80)
-    name = models.CharField(max_length=200)
-    version = models.CharField(max_length=40, default="1.0.0")
-    description = models.TextField(blank=True, default="")
-
-    base_url = models.CharField(max_length=500, blank=True, default="")
-    encrypted_secret = models.TextField(blank=True, default="")
-
-    is_enabled = models.BooleanField(default=True)
-    installed_at = models.DateTimeField(auto_now_add=True)
-
-    def set_secret(self, value: str) -> None:
-        from .crypto_secrets import encrypt_secret
-        self.encrypted_secret = encrypt_secret(value)
-
-    def get_secret(self) -> str:
-        from .crypto_secrets import decrypt_secret
-        return decrypt_secret(self.encrypted_secret)
-
-
-class AddonAction(models.Model):
-    class Scope(models.TextChoices):
-        CASE = "case", "Case"
-        IOC = "ioc", "IoC"
-        ASSET = "asset", "Asset"
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    addon = models.ForeignKey(Addon, on_delete=models.CASCADE, related_name="actions")
-
-    action_id = models.CharField(max_length=120)
-    label = models.CharField(max_length=200)
-    scope = models.CharField(max_length=20, choices=Scope.choices)
-
-    method = models.CharField(max_length=10, default="POST")
-    path = models.CharField(max_length=300, default="/")
-    timeout_ms = models.PositiveIntegerField(default=5000)
-
-    is_enabled = models.BooleanField(default=True)
-
-    class Meta:
-        unique_together = [("addon", "action_id")]
-
-
 class ActionRun(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    addon = models.ForeignKey(Addon, null=True, blank=True, on_delete=models.PROTECT)
-    action = models.ForeignKey(AddonAction, null=True, blank=True, on_delete=models.PROTECT)
-
     connector_instance = models.ForeignKey(
-        "core.ConnectorInstance", null=True, blank=True,
-        on_delete=models.SET_NULL, related_name="action_runs"
+        "core.ConnectorInstance",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="action_runs",
     )
+
     connector_endpoint = models.ForeignKey(
-        "core.ConnectorEndpoint", null=True, blank=True,
-        on_delete=models.SET_NULL, related_name="action_runs"
+        "core.ConnectorEndpoint",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="action_runs",
     )
 
     scope = models.CharField(max_length=20)

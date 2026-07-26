@@ -1124,13 +1124,18 @@ class ConnectorEndpointSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConnectorEndpoint
         fields = [
-            "id", "instance_id",
-            "name", "label",
-            "target_type", "method",
-            "base_url", "path_template",
-            "headers_text", "timeout_ms",
-            "is_enabled", "created_at",
-            "headers"
+            "id",
+            "instance_id",
+            "name",
+            "label",
+            "target_type",
+            "method",
+            "base_url",
+            "path_template",
+            "timeout_ms",
+            "is_enabled",
+            "created_at",
+            "headers",
         ]
         read_only_fields = ["id", "created_at", "instance_id"]
 
@@ -1153,6 +1158,37 @@ class ConnectorInstanceSerializer(serializers.ModelSerializer):
 
     def get_has_secret(self, obj: ConnectorInstance) -> bool:
         return bool(obj.encrypted_secret)
+
+
+class ConnectorRunnableEndpointSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConnectorEndpoint
+        fields = [
+            "id",
+            "instance_id",
+            "name",
+            "label",
+            "target_type",
+            "method",
+            "base_url",
+            "path_template",
+            "is_enabled",
+        ]
+        read_only_fields = fields
+
+
+class ConnectorRunnableInstanceSerializer(serializers.ModelSerializer):
+    endpoints = ConnectorRunnableEndpointSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ConnectorInstance
+        fields = [
+            "id",
+            "name",
+            "is_enabled",
+            "endpoints",
+        ]
+        read_only_fields = fields
 
 
 class CaseExchangeFollowupSerializer(serializers.ModelSerializer):

@@ -1,5 +1,4 @@
 export * from "./dashboard.types";
-export * from "./addons.types";
 
 export const statusLabel: Record<string, string> = {
   open: "Open",

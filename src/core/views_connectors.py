@@ -5,18 +5,15 @@ from urllib.parse import urlparse
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
 
 from .rbac import user_has_perm, get_accessible_customer_ids
 
 from .models import (
-    Addon,
-    AddonAction,
     ActionRun,
     ConnectorResult,
     Event,
@@ -27,10 +24,11 @@ from .models import (
 from .serializers import (
     ConnectorResultSerializer,
     ConnectorInstanceSerializer,
+    ConnectorRunnableInstanceSerializer,
     ConnectorEndpointSerializer,
     ConnectorAllowlistDomainSerializer,
 )
-from .addons import run_hub_request, validate_external_base_url
+from .connector_hub_client import run_hub_request, validate_external_base_url
 from .crypto_secrets import encrypt_secret, decrypt_secret
 from .outbound_proxy import build_outbound_proxy_url
 
@@ -252,6 +250,58 @@ def _render_template(s: str, *, secret: str, case_id: str, target_key: str, targ
     return out
 
 
+def _normalize_case_targets(case, target_type: str, targets) -> list[dict[str, str]]:
+    if target_type == "case":
+        return [{"key": "case", "value": str(case.id)}]
+
+    if target_type not in {"ioc", "asset"}:
+        raise ValueError("Invalid target_type")
+
+    if not isinstance(targets, list) or not targets:
+        raise ValueError("targets must be a non-empty list")
+
+    case_rows = case.iocs if target_type == "ioc" else case.assets
+    allowed_targets: set[tuple[str, str]] = set()
+
+    for row in case_rows or []:
+        if not isinstance(row, dict):
+            continue
+
+        key = str(row.get("key") or row.get("field") or "").strip()
+        value = str(row.get("value") or "").strip()
+
+        if target_type == "ioc" and not key:
+            key = "ip"
+
+        if value:
+            allowed_targets.add((key, value))
+
+    normalized_targets: list[dict[str, str]] = []
+
+    for target in targets:
+        if not isinstance(target, dict):
+            raise ValueError("Each target must be an object")
+
+        key = str(target.get("key") or "").strip()
+        value = str(target.get("value") or "").strip()
+
+        if target_type == "ioc" and not key:
+            key = "ip"
+
+        if not value:
+            raise ValueError("Target value is required")
+
+        if (key, value) not in allowed_targets:
+            raise ValueError("Target does not belong to this case")
+
+        normalized_targets.append({
+            "key": key,
+            "value": value,
+        })
+
+    return normalized_targets
+
+
 def _merge_default_accept(headers: dict) -> dict:
     low = {k.lower(): k for k in headers.keys()}
     if "accept" not in low:
@@ -300,115 +350,6 @@ def _normalize_connector_timeout_ms(value) -> int:
     return timeout_ms
 
 
-
-# ----------------------------
-# Addons settings endpoints
-# ----------------------------
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def list_addons(request):
-    if not (request.user.is_staff or user_has_perm(request.user, "settings.connectors.view")):
-        return Response({"detail": "Forbidden"}, status=403)
-    
-    addons = Addon.objects.all().order_by("name")
-    return Response([
-        {
-            "id": str(a.id),
-            "name": a.name,
-            "version": a.version,
-            "description": a.description,
-            "is_enabled": a.is_enabled,
-            "actions": [
-                {
-                    "action_id": ac.action_id,
-                    "label": ac.label,
-                    "scope": ac.scope,
-                    "method": ac.method,
-                    "path": ac.path,
-                    "is_enabled": ac.is_enabled
-                }
-                for ac in a.actions.all().order_by("label")
-            ],
-        }
-        for a in addons
-    ])
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def install_addon(request):
-    if not (request.user.is_staff or user_has_perm(request.user, "settings.connectors.manage")):
-        return Response({"detail": "Forbidden"}, status=403)
-
-    manifest = request.data
-    addon_id = manifest.get("id")
-    if not addon_id:
-        return Response({"detail": "Missing id"}, status=400)
-
-    with transaction.atomic():
-        a, _ = Addon.objects.update_or_create(
-            id=addon_id,
-            defaults={
-                "name": manifest.get("name", addon_id),
-                "version": manifest.get("version", "1.0.0"),
-                "description": manifest.get("description", ""),
-                "is_enabled": True,
-            },
-        )
-
-        AddonAction.objects.filter(addon=a).delete()
-        for act in manifest.get("actions", []):
-            AddonAction.objects.create(
-                addon=a,
-                action_id=act["id"],
-                label=act.get("label", act["id"]),
-                scope=act.get("scope", "case"),
-                method=act.get("method", "POST"),
-                path=act.get("path", "/"),
-                timeout_ms=int(act.get("timeout_ms", 8000)),
-                is_enabled=True,
-            )
-
-    return Response({"ok": True})
-
-
-@api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
-def uninstall_addon(request, addon_id: str):
-    if not (request.user.is_staff or user_has_perm(request.user, "settings.connectors.delete")):
-        return Response({"detail": "Forbidden"}, status=403)
-    
-    Addon.objects.filter(id=addon_id).delete()
-    return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-@api_view(["PATCH"])
-@permission_classes([IsAuthenticated])
-def patch_addon_config(request, addon_id: str):
-    if not (request.user.is_staff or user_has_perm(request.user, "settings.connectors.manage")):
-        return Response({"detail": "Forbidden"}, status=403)
-
-    a = Addon.objects.filter(id=addon_id).first()
-    if not a:
-        return Response({"detail": "Addon not found"}, status=404)
-
-    is_enabled = request.data.get("is_enabled", None)
-    if is_enabled is not None:
-        a.is_enabled = bool(is_enabled)
-        a.save(update_fields=["is_enabled"])
-
-    return Response(
-        {
-            "id": str(a.id),
-            "name": a.name,
-            "version": a.version,
-            "description": a.description,
-            "is_enabled": a.is_enabled,
-        }
-    )
-
-
 def _connector_forbidden(request, perm_code: str):
     if request.user.is_staff:
         return None
@@ -454,6 +395,34 @@ def _validate_connector_headers(headers: dict) -> dict:
 # ----------------------------
 # Connector settings (Instances + Endpoints + Allowlist)
 # ----------------------------
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def connector_runnable_instances(request):
+    if not (
+        request.user.is_staff
+        or user_has_perm(request.user, "chat.soar.use")
+    ):
+        return Response({"detail": "Forbidden"}, status=403)
+
+    endpoints = ConnectorEndpoint.objects.filter(
+        is_enabled=True,
+    ).order_by("label", "name")
+
+    instances = (
+        ConnectorInstance.objects
+        .filter(is_enabled=True)
+        .prefetch_related(
+            Prefetch("endpoints", queryset=endpoints)
+        )
+        .order_by("name")
+    )
+
+    return Response(
+        ConnectorRunnableInstanceSerializer(instances, many=True).data
+    )
+
 
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
@@ -711,7 +680,6 @@ def run_connector_action(request):
     case_id = request.data.get("case_id")
     target_type = request.data.get("target_type")
     targets = request.data.get("targets") or []
-    context = request.data.get("context") or {}
 
     connector_instance_id = request.data.get("connector_instance_id")
     endpoint_id = request.data.get("endpoint_id")
@@ -740,13 +708,10 @@ def run_connector_action(request):
     if ep.target_type not in {target_type, "case"}:
         return Response({"detail": f"Endpoint target_type mismatch (expected {target_type})"}, status=400)
 
-    if target_type in ("ioc", "asset"):
-        if not isinstance(targets, list) or not targets:
-            return Response({"detail": "targets must be a non-empty list"}, status=400)
-    elif target_type == "case":
-        targets = [{"key": "case", "value": str(case.id)}]
-    else:
-        return Response({"detail": "Invalid target_type"}, status=400)
+    try:
+        targets = _normalize_case_targets(case, str(target_type), targets)
+    except ValueError as e:
+        return Response({"detail": str(e)}, status=400)
 
     try:
         hub_url, hmac_secret = _require_connector_hub_config()
@@ -778,22 +743,14 @@ def run_connector_action(request):
         status="pending",
     )
 
-    payload = {
-        "run_id": str(run.id),
-        "actor": {"id": user.id, "username": user.username},
-        "case": {"id": str(case.id), "title": case.title},
-        "target_type": target_type,
-        "targets": targets,
-        "context": context,
-        "connector": {
-            "instance_id": str(inst.id),
-            "endpoint_id": str(ep.id),
-            "name": ep.name,
-            "method": (ep.method or "GET").upper(),
-            "base_url": base_url,
-            "path_template": ep.path_template or "",
-            "timeout_ms": int(ep.timeout_ms or 8000),
-        },
+    connector_payload = {
+        "instance_id": str(inst.id),
+        "endpoint_id": str(ep.id),
+        "name": ep.name,
+        "method": (ep.method or "GET").upper(),
+        "base_url": base_url,
+        "path_template": ep.path_template or "",
+        "timeout_ms": int(ep.timeout_ms or 8000),
     }
 
     try:
@@ -845,8 +802,6 @@ def run_connector_action(request):
                 "headers": _redact_headers(resolved_headers),
             })
 
-        payload["resolved_calls"] = redacted_calls
-
         hub_payload = {
             "run_id": str(run.id),
             "calls": resolved_calls,
@@ -878,7 +833,7 @@ def run_connector_action(request):
         results_list = results_list if isinstance(results_list, list) else None
 
         with transaction.atomic():
-            for t in targets:
+            for index, t in enumerate(targets):
                 tkey = str(t.get("key") or "")
                 tval = str(t.get("value") or "")
 
@@ -918,6 +873,19 @@ def run_connector_action(request):
                             json.dumps(body)[:2000] if isinstance(body, (dict, list)) else str(body)[:2000]
                         )
 
+                redacted_call = redacted_calls[index] if index < len(redacted_calls) else {}
+
+                request_payload = {
+                    "run_id": str(run.id),
+                    "target_type": target_type,
+                    "target": {
+                        "key": tkey,
+                        "value": tval,
+                    },
+                    "connector": connector_payload,
+                    "call": redacted_call,
+                }
+
                 cr = ConnectorResult.objects.create(
                     case=case,
                     instance=inst,
@@ -926,7 +894,7 @@ def run_connector_action(request):
                     target_type=target_type,
                     target_key=tkey,
                     target_value=tval,
-                    request_payload=payload,
+                    request_payload=request_payload,
                     response_payload=result_payload if isinstance(result_payload, (dict, list)) else {"raw": str(result_payload)},
                     status=ConnectorResult.Status.SUCCESS if ok else ConnectorResult.Status.ERROR,
                     error=err_msg,

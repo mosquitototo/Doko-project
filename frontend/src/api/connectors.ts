@@ -4,13 +4,31 @@ import { ensureCsrf } from "./auth";
 export type ConnectorTargetType = "case" | "ioc" | "asset";
 export type ConnectorTarget = { key: string; value: string };
 
+export type RunnableConnectorEndpoint = {
+  id: string;
+  instance_id: string;
+  name: string;
+  label: string;
+  target_type: ConnectorTargetType;
+  method: string;
+  base_url: string;
+  path_template: string;
+  is_enabled: boolean;
+};
+
+export type RunnableConnectorInstance = {
+  id: string;
+  name: string;
+  is_enabled: boolean;
+  endpoints: RunnableConnectorEndpoint[];
+};
+
 export type RunConnectorRequest = {
   case_id: string;
   connector_instance_id: string;
   endpoint_id: string;
   target_type: ConnectorTargetType;
   targets: ConnectorTarget[];
-  context?: any;
 };
 
 export async function runConnectorAction(payload: RunConnectorRequest) {
@@ -70,6 +88,11 @@ export type ConnectorInstance = {
 export async function listConnectorInstances() {
   const r = await api.get("/api/connectors/instances/");
   return r.data as ConnectorInstance[];
+}
+
+export async function listRunnableConnectorInstances() {
+  const r = await api.get("/api/connectors/runnable/");
+  return r.data as RunnableConnectorInstance[];
 }
 
 export async function createConnectorInstance(payload: {
