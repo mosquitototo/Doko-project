@@ -113,7 +113,7 @@ from .views_settings import (
 )
 
 
-from .views_addons import (
+from .views_connectors import (
     run_connector_action,
     list_connector_results,
     connector_instances,
@@ -122,6 +122,7 @@ from .views_addons import (
     connector_endpoint_detail,
     connector_allowlist,
     connector_allowlist_detail,
+    connector_runnable_instances,
 )
 
 from .views_auth import (
@@ -247,7 +248,7 @@ urlpatterns = [
     path("connectors/instances/<str:instance_id>/endpoints/", connector_instance_add_endpoint),
     path("connectors/endpoints/<str:endpoint_id>/", connector_endpoint_detail),
     path("connectors/allowlist/", connector_allowlist),
-    path("connectors/allowlist/<str:domain_id>/", connector_allowlist_detail),
+    path("connectors/runnable/", connector_runnable_instances, name="connector-runnable-instances", ),
 
     path("settings/audit/", SettingsAuditLogListView.as_view(), name="settings-audit"),
     path("settings/audit/<uuid:pk>/", SettingsAuditLogDetailView.as_view(), name="settings-audit-detail"),

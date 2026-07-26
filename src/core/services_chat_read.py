@@ -16,6 +16,24 @@ from .services_chat_query import (
 from .services_llm import LLMService
 
 
+ALLOWED_OPERATIONS = frozenset({
+    "none",
+    "search",
+    "query",
+})
+
+SEARCH_RESOURCES = frozenset({
+    "all",
+    "case",
+    "alert",
+    "hunt",
+})
+
+SEARCH_MATCH_MODES = frozenset({
+    "broad",
+    "exact_token",
+})
+
 
 def _extract_json_object(text: str) -> dict:
     match = re.search(

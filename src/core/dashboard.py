@@ -1,6 +1,6 @@
 from datetime import timedelta, date, datetime, time
 
-from django.db.models import Count, Min, Q
+from django.db.models import Count, Min
 from django.utils import timezone
 from django.db.models.functions import TruncDate
 from django.utils.dateparse import parse_date

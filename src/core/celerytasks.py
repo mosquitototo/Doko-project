@@ -18,11 +18,9 @@ from .models import (
     AuditLog,
     ChatRun,
     CaseExchange,
-    CaseExchangeReplyQuickpart,
     CaseExchangeFollowup,
 )
 from .services_chat import execute_chat_run
-from .audit import audit_event
 
 
 @shared_task

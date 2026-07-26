@@ -17,10 +17,8 @@ import { getClientTabId, makeRequestId } from "../auth/clientTab";
 import {
   SendButton,
   CopyButton,
-  DeleteButton,
   ClearButton,
 } from "../components/ui/IconButton";
-import TiptapRenderedContent from "../components/ui/TiptapRenderedContent";
 import ChatMessageContent from "../components/chat/ChatMessageContent";
 
 function FieldLabel({

@@ -2,8 +2,6 @@ from __future__ import annotations
 from typing import Any, Optional
 from uuid import UUID
 
-from django.utils.timezone import now
-
 from .models import AuditLog
 
 

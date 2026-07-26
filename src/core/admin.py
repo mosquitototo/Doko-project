@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Event, TimelineItem, Addon, AddonAction, ActionRun
+from .models import Event, TimelineItem, ActionRun
 
 
 @admin.register(Event)
@@ -18,20 +18,34 @@ class TimelineItemAdmin(admin.ModelAdmin):
     raw_id_fields = ("event",)
 
 
-@admin.register(Addon)
-class AddonAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "version", "is_enabled", "installed_at")
-    search_fields = ("id", "name")
-
-
-@admin.register(AddonAction)
-class AddonActionAdmin(admin.ModelAdmin):
-    list_display = ("action_id", "label", "scope", "method", "path", "is_enabled", "addon")
-    list_filter = ("scope", "is_enabled", "addon")
-
-
 @admin.register(ActionRun)
 class ActionRunAdmin(admin.ModelAdmin):
-    list_display = ("id", "addon", "action", "scope", "target_id", "status", "http_status", "created_at", "requested_by")
-    list_filter = ("status", "scope", "addon")
-    search_fields = ("target_id",)
+    list_display = (
+        "id",
+        "connector_instance",
+        "connector_endpoint",
+        "scope",
+        "status",
+        "http_status",
+        "requested_by",
+        "created_at",
+    )
+    list_filter = (
+        "status",
+        "scope",
+        "connector_instance",
+        "connector_endpoint",
+        "created_at",
+    )
+    search_fields = (
+        "id",
+        "target_id",
+        "result_message",
+        "requested_by__username",
+        "connector_instance__name",
+        "connector_endpoint__name",
+    )
+    readonly_fields = (
+        "id",
+        "created_at",
+    )

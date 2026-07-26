@@ -33,7 +33,7 @@ import { listClassifications, listSeverities, type ClassificationItem, type Seve
 import { listReportTemplates } from "../api/settingsReports";
 import IncidentTimeline from "../components/incident/IncidentTimeline";
 import ConnectorRunnerDrawer from "../components/connectors/ConnectorRunnerDrawer";
-import { listConnectorInstances, listConnectorResults, type ConnectorInstance, type ConnectorTarget, type ConnectorTargetType } from "../api/connectors";
+import { listRunnableConnectorInstances, listConnectorResults, type RunnableConnectorInstance, type ConnectorTarget, type ConnectorTargetType } from "../api/connectors";
 import { createCaseExchange, deleteCaseExchange, listCaseExchanges, sendCaseExchange, configureCaseExchangeFollowups, type CaseExchange, updateCaseExchange } from "../api/exchanges";
 import { listCaseExchangeQuickparts, type CaseExchangeQuickpart } from "../api/settingsCaseExchange";
 import CaseActivityTab from "../components/cases/detail/CaseActivityTab";
@@ -44,7 +44,6 @@ import CaseIndicatorsTab from "../components/cases/detail/CaseIndicatorsTab";
 import CaseSummaryTab from "../components/cases/detail/CaseSummaryTab";
 import type { EnrichmentLite, KVRow, Tab } from "../components/cases/detail/types";
 import { buildHistoryIndex, getHistoryBundle, isRichTextEmpty, joinCsv, normalizeSubjectForReply, parseCsv, rowId, uniqKeepOrder } from "../components/cases/detail/utils";
-import { LeftButton } from "../components/ui/IconButton";
 
 
 export default function TicketDetail() {
@@ -980,12 +979,12 @@ export default function TicketDetail() {
     listReportTemplates({ include_inactive: false }).then((r) => setReportTemplates((r.results ?? []).filter((x: any) => x.is_active))).catch(() => setReportTemplates([]));
   }, []);
 
-  const [instances, setInstances] = useState<ConnectorInstance[]>([]);
+  const [instances, setInstances] = useState<RunnableConnectorInstance[]>([]);
   const [instancesBusy, setInstancesBusy] = useState(false);
   async function loadConnectorInstances() {
     setInstancesBusy(true);
     try {
-      const r = await listConnectorInstances();
+      const r = await listRunnableConnectorInstances();
       setInstances(Array.isArray(r) ? r : []);
     } catch {
       setInstances([]);
@@ -1312,7 +1311,6 @@ export default function TicketDetail() {
           tab={tab}
           ticketId={ticketId}
           canUpdateCase={canUpdateCase}
-          event={event}
           iocs={iocs}
           assets={assets}
           busy={busy}
@@ -1334,8 +1332,6 @@ export default function TicketDetail() {
           setDrawerOpen={setDrawerOpen}
           instancesBusy={instancesBusy}
           openHistoryDrawer={openHistoryDrawer}
-          actionRaw={actionRaw}
-          setActionRaw={setActionRaw}
           setBusy={setBusy}
           setEvent={setEvent}
         />
