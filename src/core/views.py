@@ -4227,11 +4227,17 @@ class CaseExchangeListCreateForCaseView(APIView):
         payload = dict(ser.validated_data)
         payload["subject"] = _ensure_case_subject_prefix(payload.get("subject", ""), case)
 
-        with transaction.atomic():
-            ex = CaseExchange.objects.create(
-                case=case,
-                created_by=request.user,
-                **payload,
+        try:
+            with transaction.atomic():
+                ex = CaseExchange.objects.create(
+                    case=case,
+                    created_by=request.user,
+                    **payload,
+                )
+        except IntegrityError:
+            return Response(
+                {"detail": "An Exchange with this message_id already exists for this case."},
+                status=status.HTTP_409_CONFLICT,
             )
 
         TimelineItem.objects.create(
@@ -4304,19 +4310,25 @@ class CaseExchangeSendView(APIView):
         raw["send_status"] = "pending"
         payload["raw"] = raw
 
-        with transaction.atomic():
-            ex = CaseExchange.objects.create(
-                case=case,
-                created_by=request.user,
-                **payload,
-            )
+        try:
+            with transaction.atomic():
+                ex = CaseExchange.objects.create(
+                    case=case,
+                    created_by=request.user,
+                    **payload,
+                )
 
-            TimelineItem.objects.create(
-                case=case,
-                date=date.today(),
-                type="case_exchange_created",
-                text=f"Exchange sent: {(ex.subject or '(no subject)')}",
-                actor=request.user,
+                TimelineItem.objects.create(
+                    case=case,
+                    date=date.today(),
+                    type="case_exchange_created",
+                    text=f"Exchange sent: {(ex.subject or '(no subject)')}",
+                    actor=request.user,
+                )
+        except IntegrityError:
+            return Response(
+                {"detail": "An Exchange with this message_id already exists for this case."},
+                status=status.HTTP_409_CONFLICT,
             )
 
         try:

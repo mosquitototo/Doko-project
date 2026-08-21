@@ -32,7 +32,6 @@ from .services_chat_read import (
 )
 from .services_llm import LLMService
 from .audit import sanitize_audit_metadata
-from .rbac import user_has_perm
 from .services_soar import (
     collect_soar_result,
     launch_soar_execution,
@@ -899,6 +898,7 @@ def _publish_action_result_message(action: ChatActionRun) -> None:
         content=answer,
         metadata={
             "run_id": str(action.run.id),
+            "request_id": action.run.request_id,
             "action_id": str(action.id),
             "message_kind": "action_result",
         },
@@ -1162,18 +1162,9 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
 
         explicit_command_missed = bool(explicit_template_code or explicit_chat_command)
 
-        customer_id = (getattr(run.session, "customer_id", "") or "").strip() or None
-        can_use_soar = user_has_perm(run.user, "chat.soar.use", customer_id=customer_id)
-        natural_template_selection = template is None and not explicit_command_missed and can_use_soar
-
-        if template is None and (explicit_command_missed or natural_template_selection):
+        if template is None and explicit_command_missed:
             _set_run_progress(run, label="Checking available SOAR actions…")
             template, llm_selected_variables, template_reason = _select_investigation_template_with_llm(run)
-
-        if natural_template_selection and template is not None and template.risk_level == "high":
-            template = None
-            llm_selected_variables = {}
-            template_reason = "High-risk actions require an explicit command or template selection."
 
         if template is not None and (run.prompt or "").strip():
             pre_inference_variables = {
@@ -1404,6 +1395,7 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
 
         message_metadata = {
             "run_id": str(run.id),
+            "request_id": run.request_id,
             "message_kind": "chat_response",
         }
 

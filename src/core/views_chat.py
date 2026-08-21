@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from django.db import transaction
+from django.db.models import Prefetch
 from django.utils import timezone
 
 from .models import ChatGeneratedDraft, ChatRun, ChatSession, InvestigationTemplate
@@ -32,7 +33,17 @@ class ChatSessionListCreateView(APIView):
     def get(self, request):
         if not user_has_perm(request.user, "chat.use"):
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-        qs = ChatSession.objects.filter(user=request.user, is_archived=False).order_by("-updated_at")[:50]
+        qs = (
+            ChatSession.objects.filter(user=request.user, is_archived=False)
+            .prefetch_related(
+                Prefetch(
+                    "runs",
+                    queryset=ChatRun.objects.filter(status__in=["queued", "running"]).order_by("-created_at"),
+                    to_attr="active_chat_runs",
+                )
+            )
+            .order_by("-updated_at")[:50]
+        )
         return Response(ChatSessionSerializer(qs, many=True).data)
 
     def post(self, request):
@@ -152,6 +163,20 @@ class ChatRunCreateView(APIView):
         existing_run = ChatRun.objects.filter(session=session, request_id=request_id).first()
         if existing_run:
             return Response(ChatRunSerializer(existing_run).data, status=status.HTTP_200_OK)
+
+        active_run = (
+            ChatRun.objects.filter(session=session, status__in=["queued", "running"])
+            .order_by("-created_at")
+            .first()
+        )
+        if active_run:
+            return Response(
+                {
+                    "detail": "A response is already being generated for this conversation.",
+                    "run": ChatRunSerializer(active_run).data,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         
         template_code = str(request.data.get("template_code") or "").strip()
         chat_command = str(request.data.get("chat_command") or "").strip()

@@ -15,6 +15,7 @@ import {
   generateDraft,
   postDraft,
   clearChatSession,
+  orderChatMessages,
 } from "../../api/chat";
 import { getClientTabId, makeRequestId } from "../../auth/clientTab";
 import {
@@ -178,7 +179,7 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
       });
     }
 
-    return baseMessages;
+    return orderChatMessages(baseMessages);
   }, [activeSession?.messages, run]);
 
   const isGenerating =
@@ -212,6 +213,7 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
 
         if (matching) {
           setActiveSession(matching);
+          setRun(matching.active_run || null);
         } else {
           const created = await createChatSession({
             title: "Assistant",
@@ -226,6 +228,7 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
 
           setSessions((prev) => [created, ...prev]);
           setActiveSession(created);
+          setRun(null);
         }
       } catch (e: any) {
         toast.push({
@@ -289,7 +292,10 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
               role: "assistant",
               content: refreshed.response_text,
               created_at: refreshed.completed_at || new Date().toISOString(),
-              metadata: { run_id: refreshed.id },
+              metadata: {
+                run_id: refreshed.id,
+                request_id: refreshed.request_id,
+              },
             };
 
             return {
@@ -551,7 +557,7 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
   }
 
   async function handleSend() {
-    if (!activeSession || !prompt.trim()) return;
+    if (!activeSession || !prompt.trim() || isGenerating) return;
 
     const message = prompt.trim();
     const requestId = makeRequestId();

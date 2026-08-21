@@ -12,6 +12,7 @@ export type ChatSession = {
   created_at: string;
   updated_at: string;
   messages?: ChatMessage[];
+  active_run?: ChatRun | null;
 };
 
 export type ChatMessage = {
@@ -21,6 +22,40 @@ export type ChatMessage = {
   metadata?: Record<string, unknown>;
   created_at: string;
 };
+
+export function orderChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const userRequestIds = new Set(
+    messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.metadata?.request_id || ""))
+      .filter(Boolean)
+  );
+  const responsesByRequest = new Map<string, ChatMessage[]>();
+  const pairedMessageIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    const requestId = String(message.metadata?.request_id || "");
+    if (!requestId || !userRequestIds.has(requestId)) continue;
+    responsesByRequest.set(requestId, [
+      ...(responsesByRequest.get(requestId) || []),
+      message,
+    ]);
+    pairedMessageIds.add(message.id);
+  }
+
+  const ordered: ChatMessage[] = [];
+  for (const message of messages) {
+    if (pairedMessageIds.has(message.id)) continue;
+    ordered.push(message);
+    if (message.role !== "user") continue;
+    const requestId = String(message.metadata?.request_id || "");
+    ordered.push(...(responsesByRequest.get(requestId) || []));
+    responsesByRequest.delete(requestId);
+  }
+
+  return ordered;
+}
 
 export type ChatDraft = {
   id: string;

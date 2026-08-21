@@ -12,6 +12,7 @@ import {
   fetchChatRun,
   listChatSessions,
   cancelChatRun,
+  orderChatMessages,
 } from "../api/chat";
 import { getClientTabId, makeRequestId } from "../auth/clientTab";
 import {
@@ -189,11 +190,11 @@ export default function ChatbotPage() {
         content: run.response_text,
         created_at:
           run.completed_at || run.created_at || new Date().toISOString(),
-        metadata: { run_id: run.id },
+        metadata: { run_id: run.id, request_id: run.request_id },
       });
     }
 
-    return baseMessages;
+    return orderChatMessages(baseMessages);
   }, [activeSession?.messages, run]);
 
 
@@ -215,6 +216,7 @@ export default function ChatbotPage() {
 
         if (dedicatedItems.length > 0) {
           setActiveSession(dedicatedItems[0]);
+          setRun(dedicatedItems[0].active_run || null);
           return;
         }
 
@@ -225,6 +227,7 @@ export default function ChatbotPage() {
         });
 
         setActiveSession(created);
+        setRun(null);
       } catch (e: any) {
         toast.push({
           kind: "error",
@@ -261,7 +264,10 @@ export default function ChatbotPage() {
               role: "assistant",
               content: refreshed.response_text,
               created_at: refreshed.completed_at || new Date().toISOString(),
-              metadata: { run_id: refreshed.id },
+              metadata: {
+                run_id: refreshed.id,
+                request_id: refreshed.request_id,
+              },
             };
 
             return {
@@ -337,7 +343,7 @@ export default function ChatbotPage() {
   }
 
   async function handleSend() {
-    if (!activeSession || !prompt.trim() || !canUseChatLlm) return;
+    if (!activeSession || !prompt.trim() || !canUseChatLlm || isGenerating) return;
 
     const message = prompt.trim();
     const requestId = makeRequestId();

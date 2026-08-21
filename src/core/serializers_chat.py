@@ -661,11 +661,71 @@ class ChatRunSerializer(serializers.ModelSerializer):
 
 class ChatSessionSerializer(serializers.ModelSerializer):
     messages = serializers.SerializerMethodField()
+    active_run = serializers.SerializerMethodField()
 
     def get_messages(self, obj):
         messages = list(obj.messages.order_by("-created_at")[:100])
         messages.reverse()
-        return ChatMessageSerializer(messages, many=True).data
+
+        run_ids = {
+            str((message.metadata or {}).get("run_id") or "")
+            for message in messages
+            if message.role == "assistant"
+        }
+        run_ids.discard("")
+        request_ids_by_run = {
+            str(run_id): request_id
+            for run_id, request_id in ChatRun.objects.filter(id__in=run_ids).values_list(
+                "id",
+                "request_id",
+            )
+        }
+
+        user_request_ids = {
+            str((message.metadata or {}).get("request_id") or "")
+            for message in messages
+            if message.role == "user"
+        }
+        user_request_ids.discard("")
+        responses_by_request: dict[str, list[ChatMessage]] = {}
+        paired_message_ids: set[str] = set()
+
+        for message in messages:
+            if message.role != "assistant":
+                continue
+            metadata = message.metadata or {}
+            request_id = str(metadata.get("request_id") or "")
+            if not request_id:
+                request_id = request_ids_by_run.get(str(metadata.get("run_id") or ""), "")
+                if request_id:
+                    message.metadata = {**metadata, "request_id": request_id}
+            if request_id and request_id in user_request_ids:
+                responses_by_request.setdefault(request_id, []).append(message)
+                paired_message_ids.add(str(message.id))
+
+        ordered_messages: list[ChatMessage] = []
+        for message in messages:
+            if str(message.id) in paired_message_ids:
+                continue
+            ordered_messages.append(message)
+            if message.role != "user":
+                continue
+            request_id = str((message.metadata or {}).get("request_id") or "")
+            ordered_messages.extend(responses_by_request.pop(request_id, []))
+
+        return ChatMessageSerializer(ordered_messages, many=True).data
+
+    def get_active_run(self, obj):
+        prefetched = getattr(obj, "active_chat_runs", None)
+        if prefetched is not None:
+            active_run = prefetched[0] if prefetched else None
+        else:
+            active_run = (
+                obj.runs.filter(status__in=["queued", "running"])
+                .order_by("-created_at")
+                .first()
+            )
+        return ChatRunSerializer(active_run).data if active_run else None
 
     class Meta:
         model = ChatSession
@@ -680,4 +740,5 @@ class ChatSessionSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "messages",
+            "active_run",
         ]

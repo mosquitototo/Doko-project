@@ -12,11 +12,12 @@ from core.crypto_secrets import encrypt_secret
 from core.models import AIProvider, Alert, AlertComment, AuditLog, AutomationExecutionLog, AutomationRule, Case, CaseExchange, ChatContextSnapshot, ChatGeneratedDraft, ChatMessage, ChatRun, ChatSession, Comment, ConnectorAllowlistDomain, ConnectorEndpoint, ConnectorInstance, ConnectorResult, Customer, CustomerAccess, Hunt, HuntJournalEntry, InstanceProxySettings, InstanceSplunkHecSettings, InvestigationTemplate, Permission, Role, Severity, Classification, SOARProvider, Task, UserRole, WorkbookInstance, WorkbookTemplate, WorkbookTemplateItem
 from core.outbound_proxy import build_outbound_proxies
 from core.rbac import get_permitted_customer_ids, user_has_perm
+from core.serializers_chat import ChatSessionSerializer
 from core.serializers_settings import AutomationRuleSerializer, RoleSerializer
 from core.services_automation import AutomationContext, evaluate_rule_conditions, run_automation_rules_for_event
 from core.services_chat_context import ChatContextRequest, build_chat_context_snapshot
 from core.services_chat_posting import post_generated_draft, user_has_draft_target_permission
-from core.services_chat import _build_recent_conversation_history, _format_prompt
+from core.services_chat import _build_recent_conversation_history, _format_prompt, execute_chat_run
 from core.services_llm import LLMService
 from core.services_soar import SOARService, _sanitize_soar_data
 from core.services_splunk_hec import build_audit_log_hec_payload, send_payload_to_splunk_hec, test_splunk_hec_connection
@@ -63,6 +64,26 @@ class DokoSecurityAndFunctionTests(APITestCase):
         )
         self.assertEqual(self.client.delete(f"/api/cases/{case_id}/").status_code, 204)
         self.assertFalse(Case.objects.filter(id=case_id).exists())
+
+    def test_legacy_event_routes_remain_operational(self):
+        admin = User.objects.create_user(
+            username="legacy-event-admin",
+            password="StrongPass-Legacy!",
+            is_staff=True,
+        )
+        case = Case.objects.create(title="Legacy Event routes", customer=self.customer_a, owner=admin)
+        self.authenticate(admin)
+
+        self.assertEqual(self.client.get(f"/api/events/{case.id}/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/events/{case.id}/timeline-items/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/events/{case.id}/comments/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/events/{case.id}/attachments/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/events/{case.id}/alerts/").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/events/{case.id}/tasks/").status_code, 200)
+        self.assertEqual(self.client.post(f"/api/events/{case.id}/archive/").status_code, 200)
+        self.assertEqual(self.client.post(f"/api/events/{case.id}/unarchive/").status_code, 200)
+        self.assertEqual(self.client.post(f"/api/events/{case.id}/delete/").status_code, 204)
+        self.assertFalse(Case.objects.filter(id=case.id).exists())
 
     def test_case_cannot_move_to_an_unauthorized_customer(self):
         self.grant(self.user_a, self.customer_a, "case.view", "case.update")
@@ -180,6 +201,41 @@ class DokoSecurityAndFunctionTests(APITestCase):
         self.assertFalse(Hunt.objects.filter(id=hunt.id).exists())
         self.assertFalse(Customer.objects.filter(id=customer.id).exists())
         self.assertFalse(Role.objects.filter(id=role.id).exists())
+
+    def test_duplicate_exchange_message_id_returns_conflict(self):
+        admin = User.objects.create_user(
+            username="exchange-admin",
+            password="StrongPass-Exchange!",
+            is_staff=True,
+        )
+        case = Case.objects.create(title="Exchange conflict", customer=self.customer_a, owner=admin)
+        CaseExchange.objects.create(
+            case=case,
+            direction="outbound",
+            message_id="duplicate-message-id",
+        )
+        self.authenticate(admin)
+        payload = {
+            "direction": "outbound",
+            "subject": "Duplicate",
+            "body": "Duplicate body",
+            "message_id": "duplicate-message-id",
+        }
+
+        create_response = self.client.post(
+            f"/api/cases/{case.id}/exchanges/",
+            payload,
+            format="json",
+        )
+        send_response = self.client.post(
+            f"/api/cases/{case.id}/exchanges/send/",
+            payload,
+            format="json",
+        )
+
+        self.assertEqual(create_response.status_code, 409)
+        self.assertEqual(send_response.status_code, 409)
+        self.assertEqual(CaseExchange.objects.filter(case=case, message_id="duplicate-message-id").count(), 1)
 
     def test_admin_is_exposed_with_clear_business_name(self):
         admin = User.objects.create_user(
@@ -685,6 +741,151 @@ class DokoSecurityAndFunctionTests(APITestCase):
         self.assertNotIn("current-message", prompt)
         self.assertNotIn("other-session-secret", prompt)
         self.assertIn("message-13", prompt)
+
+    def test_catbot_pairs_each_response_with_its_request(self):
+        provider = AIProvider.objects.create(
+            name="Message ordering provider",
+            code="message-ordering-provider",
+            base_url="http://127.0.0.1:1/v1",
+            default_model="test",
+        )
+        session = ChatSession.objects.create(user=self.user_a, client_tab_id="ordering")
+        snapshot = ChatContextSnapshot.objects.create(
+            session=session,
+            user=self.user_a,
+            context_payload={},
+        )
+        first_run = ChatRun.objects.create(
+            session=session,
+            snapshot=snapshot,
+            user=self.user_a,
+            provider=provider,
+            request_id="request-1",
+            client_tab_id="ordering",
+            prompt="First",
+            status="completed",
+        )
+        second_run = ChatRun.objects.create(
+            session=session,
+            snapshot=snapshot,
+            user=self.user_a,
+            provider=provider,
+            request_id="request-2",
+            client_tab_id="ordering",
+            prompt="Second",
+            status="completed",
+        )
+        ChatMessage.objects.create(
+            session=session,
+            role="user",
+            content="user-1",
+            metadata={"request_id": "request-1"},
+        )
+        ChatMessage.objects.create(
+            session=session,
+            role="user",
+            content="user-2",
+            metadata={"request_id": "request-2"},
+        )
+        ChatMessage.objects.create(
+            session=session,
+            role="assistant",
+            content="assistant-1",
+            metadata={"run_id": str(first_run.id)},
+        )
+        ChatMessage.objects.create(
+            session=session,
+            role="assistant",
+            content="assistant-2",
+            metadata={"run_id": str(second_run.id)},
+        )
+
+        data = ChatSessionSerializer(session).data
+
+        self.assertEqual(
+            [message["content"] for message in data["messages"]],
+            ["user-1", "assistant-1", "user-2", "assistant-2"],
+        )
+        self.assertEqual(data["messages"][1]["metadata"]["request_id"], "request-1")
+        self.assertEqual(data["messages"][3]["metadata"]["request_id"], "request-2")
+
+    @patch("core.services_chat._select_investigation_template_with_llm")
+    @patch("core.services_chat.plan_chat_read_operation", return_value={"operation": "none"})
+    @patch("core.services_chat.LLMService.generate", return_value="Normal answer")
+    def test_normal_catbot_prompt_does_not_select_soar_template(
+        self,
+        _generate,
+        _plan,
+        select_template,
+    ):
+        provider = AIProvider.objects.create(
+            name="Normal prompt provider",
+            code="normal-prompt-provider",
+            base_url="http://127.0.0.1:1/v1",
+            default_model="test",
+        )
+        session = ChatSession.objects.create(user=self.user_a, client_tab_id="normal-prompt")
+        snapshot = ChatContextSnapshot.objects.create(
+            session=session,
+            user=self.user_a,
+            context_payload={"page_type": "global"},
+        )
+        run = ChatRun.objects.create(
+            session=session,
+            snapshot=snapshot,
+            user=self.user_a,
+            provider=provider,
+            request_id="normal-request",
+            client_tab_id="normal-prompt",
+            prompt="Summarize recent cases",
+        )
+
+        execute_chat_run(run)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(run.response_text, "Normal answer")
+        select_template.assert_not_called()
+
+    def test_catbot_rejects_a_second_active_run_for_the_same_session(self):
+        self.grant(self.user_a, self.customer_a, "chat.use", "chat.llm.use")
+        self.authenticate(self.user_a)
+        provider = AIProvider.objects.create(
+            name="Concurrent run provider",
+            code="concurrent-run-provider",
+            base_url="http://127.0.0.1:1/v1",
+            default_model="test",
+        )
+        session = ChatSession.objects.create(user=self.user_a, client_tab_id="concurrent")
+        snapshot = ChatContextSnapshot.objects.create(
+            session=session,
+            user=self.user_a,
+            context_payload={},
+        )
+        active_run = ChatRun.objects.create(
+            session=session,
+            snapshot=snapshot,
+            user=self.user_a,
+            provider=provider,
+            request_id="active-request",
+            client_tab_id="concurrent",
+            prompt="First",
+            status="running",
+        )
+
+        response = self.client.post(
+            f"/api/chat/sessions/{session.id}/runs",
+            {
+                "client_tab_id": "concurrent",
+                "request_id": "second-request",
+                "message": "Second",
+                "page_type": "global",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["run"]["id"], str(active_run.id))
 
     def test_automation_condition_operators(self):
         target = Case.objects.create(
