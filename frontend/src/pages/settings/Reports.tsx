@@ -98,7 +98,7 @@ const DRAFT_TEMPLATE_ID = "__draft_template__";
 export default function SettingsReports() {
   const { push } = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView = can("settings.reports.view");
   const canManage = can("settings.reports.manage");
 

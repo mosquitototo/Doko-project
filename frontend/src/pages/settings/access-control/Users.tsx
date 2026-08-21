@@ -6,7 +6,7 @@ import {
   listSettingsUsers,
   createSettingsUser,
   resetSettingsUserPassword,
-  disableSettingsUser,
+  deleteSettingsUser,
   updateUser,
   type SettingsUser,
   type SettingsUserApiToken,
@@ -35,7 +35,7 @@ type EditUserUI = {
   username: string;
   email: string;
   is_active: boolean;
-  is_staff: boolean;
+  is_admin: boolean;
   role_ids: number[];
 };
 
@@ -187,7 +187,7 @@ export default function SettingsUsers() {
   const { push } = useToast();
 
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
 
   const [q, setQ] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -304,7 +304,7 @@ export default function SettingsUsers() {
         username: u.username,
         email: u.email || "",
         is_active: u.is_active,
-        is_staff: (u as any).is_staff ?? false,
+        is_admin: u.is_admin ?? false,
         role_ids: roleIds,
       });
     } catch (e: any) {
@@ -487,7 +487,7 @@ export default function SettingsUsers() {
                     </div>
 
                     <div className="col-span-1">
-                      <StatusPill active={!!(u as any).is_staff} />
+                      <StatusPill active={u.is_admin} />
                     </div>
 
                     <div className="col-span-3 flex justify-end gap-2">
@@ -832,7 +832,7 @@ export default function SettingsUsers() {
         title="Disable user"
         message={
           disableTarget
-            ? `Disable "${disableTarget.username}" ? (soft delete: is_active=false)`
+            ? `Delete "${disableTarget.username}" permanently?`
             : ""
         }
         confirmText="Disable"
@@ -846,14 +846,14 @@ export default function SettingsUsers() {
             push({
               kind: "error",
               title: "Invalid change",
-              message: "You cannot disable your own account.",
+              message: "You cannot delete your own account.",
             });
             return;
           }
           setLoading(true);
           try {
-            await disableSettingsUser(disableTarget.id);
-            push({ kind: "success", title: "User disabled" });
+            await deleteSettingsUser(disableTarget.id);
+            push({ kind: "success", title: "User deleted" });
             setDisableTarget(null);
             await load();
           } catch (e: any) {
@@ -1145,7 +1145,7 @@ export default function SettingsUsers() {
               return;
             }
 
-            if (isSelf && !editUI.is_staff && me?.is_staff) {
+            if (isSelf && !editUI.is_admin && me?.is_admin) {
               push({
                 kind: "error",
                 title: "Invalid change",
@@ -1157,7 +1157,7 @@ export default function SettingsUsers() {
               username: editUI.username.trim(),
               email: editUI.email.trim(),
               is_active: editUI.is_active,
-              is_staff: editUI.is_staff,
+              is_admin: editUI.is_admin,
               role_ids: editUI.role_ids,
             });
             push({ kind: "success", title: "User updated" });
@@ -1209,9 +1209,9 @@ export default function SettingsUsers() {
                 />
 
                 <SettingCheckbox
-                  checked={editUI.is_staff}
+                  checked={editUI.is_admin}
                   onChange={(next) =>
-                    setEditUI({ ...editUI, is_staff: next })
+                    setEditUI({ ...editUI, is_admin: next })
                   }
                   label="Administrator"
                   hint="Grants platform-wide admin privileges."

@@ -1,7 +1,7 @@
 import { api } from "./client";
 import { ensureCsrf } from "./auth";
 
-export type EventListItem = {
+export type CaseListItem = {
   id: string;
   case_number?: number | null;
   title: string;
@@ -54,7 +54,7 @@ export async function fetchTickets(params: {
   outcome?: string | string[];
   include_archived?: string;
   archived_only?: string;
-}): Promise<Paginated<EventListItem>> {
+}): Promise<Paginated<CaseListItem>> {
   const sp = new URLSearchParams();
 
   const add = (k: string, v: any) => {
@@ -82,7 +82,7 @@ export async function fetchTickets(params: {
   addMulti("outcome", params.outcome);
   add("archived_only", params.archived_only);
 
-  const res = await api.get(`/api/events/?${sp.toString()}`);
+  const res = await api.get(`/api/cases/?${sp.toString()}`);
   return res.data;
 }
 
@@ -102,7 +102,7 @@ export type CreateCasePayload = {
 
 export async function createTicket(payload: CreateCasePayload) {
   const csrfToken = await ensureCsrf();
-  const res = await api.post("/api/events/", payload, {
+  const res = await api.post("/api/cases/", payload, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -126,7 +126,7 @@ export async function updateTicket(
   }>
 ) {
   const csrfToken = await ensureCsrf();
-  const res = await api.patch(`/api/events/${id}/`, payload, {
+  const res = await api.patch(`/api/cases/${id}/`, payload, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -137,7 +137,7 @@ export async function updateTicket(
 export async function deleteCase(caseId: string): Promise<void> {
   const csrfToken = await ensureCsrf();
   await api.post(
-    `/api/events/${caseId}/delete/`,
+    `/api/cases/${caseId}/delete/`,
     {},
     {
       headers: {
@@ -150,7 +150,7 @@ export async function deleteCase(caseId: string): Promise<void> {
 export async function archiveCase(caseId: string): Promise<void> {
   const csrfToken = await ensureCsrf();
   await api.post(
-    `/api/events/${caseId}/archive/`,
+    `/api/cases/${caseId}/archive/`,
     {},
     {
       headers: {
@@ -163,7 +163,7 @@ export async function archiveCase(caseId: string): Promise<void> {
 export async function unarchiveCase(caseId: string): Promise<void> {
   const csrfToken = await ensureCsrf();
   await api.post(
-    `/api/events/${caseId}/unarchive/`,
+    `/api/cases/${caseId}/unarchive/`,
     {},
     {
       headers: {

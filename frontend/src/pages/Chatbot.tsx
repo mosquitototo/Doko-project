@@ -159,7 +159,7 @@ function MessageBubble({
 export default function ChatbotPage() {
   const toast = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canUseChat = can("chat.use");
   const canUseChatLlm = can("chat.llm.use");
 

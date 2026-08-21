@@ -474,9 +474,9 @@ export default function TaskDetail() {
     const saveInFlightRef = useRef(false);
     const saveQueuedRef = useRef(false);
 
-    const canViewTask = can("task.view");
-    const canUpdateTask = can("task.update");
-    const canDeleteTask = can("task.delete");
+    const canViewTask = can("task.view") || can("task.manage");
+    const canUpdateTask = can("task.add") || can("task.manage");
+    const canDeleteTask = can("task.manage");
 
     async function refreshAll() {
         if (!taskId) return;
@@ -1110,7 +1110,7 @@ return (
               <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-foreground">Comments</div>
-                <div className="text-xs text-muted-foreground">Notes, progress and analyst context</div>
+                <div className="text-xs text-muted-foreground">Notes, progress and task context</div>
               </div>
             </div>
 

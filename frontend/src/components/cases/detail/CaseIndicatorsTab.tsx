@@ -4,7 +4,7 @@ import ConfirmDialog from "../../ui/ConfirmDialog";
 import { ClearButton, RefreshButton } from "../../ui/IconButton";
 import { useMemo, useState } from "react";
 import { updateTicket } from "../../../api/cases";
-import type { EventDetail } from "../../../api/caseDetail";
+import type { CaseDetail } from "../../../api/caseDetail";
 import type { EnrichmentLite, KVRow } from "./types";
 import {
   ASSET_STATUS_OPTIONS,
@@ -41,7 +41,7 @@ type Props = {
   instancesBusy: boolean;
   openHistoryDrawer: (mode: "ioc" | "asset", k: string, v: string) => void;
   setBusy: React.Dispatch<React.SetStateAction<boolean>>;
-  setEvent: React.Dispatch<React.SetStateAction<EventDetail | null>>;
+  setCase: React.Dispatch<React.SetStateAction<CaseDetail | null>>;
 };
 
 function SelectionBar(props: {
@@ -200,7 +200,7 @@ export default function CaseIndicatorsTab(props: Props) {
         [isIoc ? "iocs" : "assets"]: nextRows,
       } as any);
 
-      props.setEvent((prev) =>
+      props.setCase((prev) =>
         prev
           ? ({ ...(prev as any), [isIoc ? "iocs" : "assets"]: nextRows } as any)
           : prev
@@ -350,7 +350,7 @@ export default function CaseIndicatorsTab(props: Props) {
             props.setBusy(true);
             try {
               await updateTicket(props.ticketId, { [isIoc ? "iocs" : "assets"]: next } as any);
-              props.setEvent((prev) =>
+              props.setCase((prev) =>
                 prev ? ({ ...(prev as any), [isIoc ? "iocs" : "assets"]: next } as any) : prev
               );
               props.push({ kind: "success", title: `${title} updated` });

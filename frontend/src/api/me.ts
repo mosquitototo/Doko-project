@@ -4,7 +4,7 @@ export type Me = {
   id: number;
   username: string;
   email: string;
-  is_staff: boolean;
+  is_admin: boolean;
   roles?: string[];
   permissions: string[];
   rbac_debug?: {

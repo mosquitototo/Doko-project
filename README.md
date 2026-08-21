@@ -1,127 +1,232 @@
-# Doko SOC ticketing tool
+<h1 align="center">Doko</h1>
 
-Doko is a ticketing platform designed for SOC teams to manage security work in one place. It provides a clear workspace for handling alerts, cases, tasks, hunts, and investigation notes while keeping context easy to follow.
+<p align="center">
+  Open-source investigation management, automation and collaboration platform.
+</p>
 
-Use LLM and the Catbot to ask for qualification or summarize cases, alerts, ...
+<p align="center">
+  <a href="https://github.com/mosquitototo/Doko-project/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/mosquitototo/Doko-project?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/mosquitototo/Doko-project/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Docker Compose" src="https://img.shields.io/badge/deployment-Docker%20Compose-2496ED?logo=docker&logoColor=white">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/backend-Python%203.12-3776AB?logo=python&logoColor=white">
+  <img alt="React 19" src="https://img.shields.io/badge/frontend-React%2019-61DAFB?logo=react&logoColor=black">
+</p>
 
-Its goal is to make day-to-day security operations more structured, traceable, and easier to manage from detection to resolution.
+<p align="center">
+  <img width="1194" alt="Doko dashboard" src="https://github.com/user-attachments/assets/1d161c18-8b63-42a4-86e5-4b97eb6cb0d2">
+</p>
 
-#### Dashboard
-<img width="1194" height="564" alt="image" src="https://github.com/user-attachments/assets/1d161c18-8b63-42a4-86e5-4b97eb6cb0d2" />
+## About Doko
 
+Doko brings alerts, cases, hunts, tasks and investigation data into one web application. It supports structured workflows, granular access control, external connectors, automation rules, case reports and an optional AI assistant backed by an internal or external OpenAI-compatible endpoint.
 
-#### Case
-<img width="1202" height="505" alt="image" src="https://github.com/user-attachments/assets/eb5b5645-c2e9-4b3b-af26-da123cca0987" />
+The application is distributed as a Docker Compose stack and can be configured from a single environment file. Database migrations and reference-data updates run automatically when the web service starts.
 
+Doko is built with passion by developers and elevated by controlled AI assistance.
 
-#### Alerts
-<img width="1192" height="433" alt="image" src="https://github.com/user-attachments/assets/0a96da0f-7840-43a6-b1af-858049b8e7b7" />
+## Table of contents
 
+- [Features](#features)
+- [Screenshots](#screenshots)
+- [Architecture](#architecture)
+- [Quick start](#quick-start)
+- [Example alerts](#example-alerts)
+- [Configuration](#configuration)
+- [Administrator account](#administrator-account)
+- [External services](#external-services)
+- [Documentation](#documentation)
+- [Updating and backups](#updating-and-backups)
+- [Development checks](#development-checks)
+- [Versioning](#versioning)
+- [Support and license](#support-and-license)
 
-#### Catbot (yes we love cats)  
-<img width="715" height="735" alt="image" src="https://github.com/user-attachments/assets/8f10bb1f-6eeb-4252-ae01-7924593528b8" />
+## Features
 
+- Alert with qualification, assignment, comments and merge-to-case workflows
+- Case management with IoCs, assets, attachments, workbooks, comments, exchanges and timelines
+- Hunts with journals, IoCs, assets and linked cases
+- Tasks linked to users, customers and cases
+- Customer-scoped roles and granular permissions
+- LLM-assisted chat (Catbot)
+- SOAR integration and investigation templates
+- Internal automation rules for alerts, cases and hunts
+- Connectors to connect external APIs (VT, AbuseIPDB, ...)
+- Case report templates with PDF generation
 
-## Features list
+## Screenshots
 
-- `Alerts` are security events triggered via API
-- `Cases` are merge alerts or manual creation
-- `Hunts` are manual tasks designed to search for threats on a network
-- `IoC & Assets` listing and enrichment
-- `Workbooks` to assist with processing inside a case
-- `Exchanges` to track exchanges via email or any communication platform, inside a case
-  - You can enable automatic followup to these messages
-  - You can reply to messages, inside the Doko platform or "Send" button (this is a external action to configure with an orchestrator / SOAR)
-  - Replies are custom messages or quickparts
-- `Incident Timeline` where you can enter and view the events for a case
-- `Connectors` allow you to integrate APIs from external tools such as VirusTotal or AbuseIPDB
-- `AI & SOAR`
-  - `LLM Provider` you can configure an internal or external LLM provider
-    - `Catbot` you can discuss with a chatbot when a LLM provider is configured, to help you to analyze cases, alerts, iocs, ...
-  - `SOAR Providers` allow you to configure different orchestrator providers
-  - `Investigation templates` allow you to configure, via a SOAR Provider, actions launched via the Catbot
+### Cases
 
-Please note that there may still be a few bugs inside Doko. If you find any, please let us know.
+<img width="1202" alt="Doko case details" src="https://github.com/user-attachments/assets/eb5b5645-c2e9-4b3b-af26-da123cca0987">
 
-# Installation guide
+### Alerts
 
-## 1. Clone the repository
-```
+<img width="1192" alt="Doko alerts" src="https://github.com/user-attachments/assets/0a96da0f-7840-43a6-b1af-858049b8e7b7">
+
+### Catbot
+
+<img width="715" alt="Doko Catbot assistant" src="https://github.com/user-attachments/assets/8f10bb1f-6eeb-4252-ae01-7924593528b8">
+
+## Architecture
+
+The default stack contains seven services:
+
+| Service | Purpose |
+| --- | --- |
+| `nginx` | Serves the frontend, media files and reverse-proxies the API |
+| `web` | Django API, authentication, migrations and administration tasks |
+| `celery-worker` | Runs background jobs, automation and outbound audit forwarding |
+| `celery-beat` | Schedules recurring jobs |
+| `connector_hub` | Executes signed, allowlisted connector requests |
+| `postgres` | Stores application data |
+| `redis` | Celery broker and result backend |
+
+## Quick start
+
+Requirements:
+
+- Docker Engine with the Compose plugin
+- Git
+
+Clone the repository and create the environment file:
+
+```bash
 git clone https://github.com/mosquitototo/Doko-project.git
 cd Doko-project
+cp .env.example .env
 ```
 
-## 2. Create the environment file
+Edit `.env` and replace at least these values:
 
-Copy the example environment file:
-`cp .env.example .env`
-
-Open `.env` and update the values before starting Doko.
-At minimum, change all default secrets and passwords. The following values should not be kept unchanged in production:
-```
-POSTGRES_PASSWORD=
-DJANGO_SECRET_KEY=
+```dotenv
+POSTGRES_PASSWORD=use-a-unique-database-password
+DJANGO_SECRET_KEY=use-a-unique-random-value-of-at-least-32-characters
 ```
 
-## 3. Configure the public access URL
+Build and start Doko:
 
-By default, Doko is exposed locally on port 8080.
-If the default values are kept, Doko will be available at:
-`http://127.0.0.1:8080`
-
-For a remote server, update the relevant values in `.env`, especially:
-```
-DOKO_HTTP_BIND=0.0.0.0
-DOKO_HTTP_PORT=8080
-DJANGO_ALLOWED_HOSTS=your-domain.example
-DJANGO_CSRF_TRUSTED_ORIGINS=https://your-domain.example
+```bash
+docker compose up -d --build
 ```
 
+Check the service state:
 
-## 4. Start Doko
-
-Build and start the application: `docker compose up -d --build`
-
-Check that all containers are running: `docker compose ps`
-
-The main containers should include:
-```
-doko-postgres
-doko-redis
-doko-web
-doko-celery-worker
-doko-celery-beat
-doko-connector-hub
-doko-nginx
+```bash
+docker compose ps
 ```
 
-## 5. Find the initial administrator credentials
+With the example bind settings, Doko is available at <http://127.0.0.1:8080>.
 
-The initial administrator account is created during the first installation by the web container.
-To find the generated administrator credentials, check the web container logs: `docker compose logs web`
-Look for the lines related to the initial setup or superuser creation.
+## Example alerts
 
-If you cannot find them, you can create a new one with: `docker exec -it doko-web python manage.py createsuperuser`
+Add sample alerts to a running instance:
 
-The initial setup only runs when Doko detects an empty installation. If the database already contains users or initial data, the setup is skipped on subsequent restarts.
+```bash
+docker compose exec web python manage.py seed_alerts_example
+```
 
-After the first login, change the administrator password immediately and store the credentials securely.
+## Configuration
 
-## 6. Access Doko
+All deployment configuration is read from `.env`. The example file documents the available installation variables.
 
-Once the containers are running, open Doko in a browser: `http://127.0.0.1:8080`
-If Doko is installed on a remote server, use the configured domain or server address instead.
+| Variable | Purpose | Default in the example |
+| --- | --- | --- |
+| `DOKO_HTTP_BIND` | Address exposed by Nginx | `127.0.0.1` |
+| `DOKO_HTTP_PORT` | HTTP port exposed by Nginx | `8080` |
+| `DJANGO_ALLOWED_HOSTS` | Hostnames accepted by Django | Local and example hostnames |
+| `DJANGO_CSRF_TRUSTED_ORIGINS` | Origins allowed for browser sessions | Local and example origins |
+| `DJANGO_CORS_ALLOWED_ORIGINS` | Origins allowed to call the API from a browser | Local and example origins |
+| `DJANGO_SECURE_SSL_REDIRECT` | Redirect requests to HTTPS | `0` |
+| `DJANGO_COOKIE_SECURE` | Restrict session and CSRF cookies to HTTPS | `0` |
+| `DOKO_ADMIN_USERNAME` | Initial administrator username | `admin` |
+| `DOKO_ADMIN_EMAIL` | Initial administrator email | `admin@local` |
+| `DOKO_ADMIN_PASSWORD` | Optional initial administrator password | Generated when omitted |
+| `DOKO_BACKUP_DIR` | Backup storage path inside the web container | `/app/media/backups` |
 
-## 7. Update Doko
+For remote access, set the public host and origins explicitly. When TLS terminates at a reverse proxy in front of Doko, enable secure redirect and secure cookies.
 
-To update an existing installation:
+`CONNECTOR_HMAC_SECRET` is optional. When it is absent, both internal services derive the same connector signing secret from `DJANGO_SECRET_KEY`; no manual calculation is required.
 
+## Administrator account
+
+The first startup creates an administrator only when none exists. If `DOKO_ADMIN_PASSWORD` is omitted, a strong password is generated and printed once in the web service logs:
+
+```bash
+docker compose logs web
+```
+
+Search for `DOKO INITIAL SUPERUSER CREATED`. Existing administrator credentials are never overwritten by a restart.
+
+Change a generated password after the first login and store it securely. A replacement administrator can also be created from the container when necessary:
+
+```bash
+docker compose exec web python manage.py createsuperuser
+```
+
+## External services
+
+LLM and SOAR providers, investigation templates, connectors, the outbound proxy and Splunk HEC are configured from the Doko interface.
+
+- Internal LLM and SOAR endpoints may use HTTP when they are reachable only on a trusted network.
+- Connector endpoints require HTTPS and an explicitly allowed domain.
+- The instance proxy is used by LLM, SOAR, connector and Splunk HEC requests.
+- Splunk HEC forwards structured audit events. Tokens and proxy passwords are stored encrypted and are never returned by the settings API.
+- Chat context is permission-checked and limited to the sections selected for the request.
+
+## Documentation
+
+Usage, configuration and API guides are available inside Doko under **Settings → Documentation**. They cover:
+
+- LLM, SOAR and investigation templates
+- automation rules
+- connectors
+- instance settings, proxy and Splunk HEC
+- case report templates
+- API authentication and automation examples
+
+The API is exposed under `/api/`. Authentication supports browser sessions and API tokens according to the permissions assigned to the account.
+
+## Updating and backups
+
+Create and download a database backup from **Settings → Instance settings** before an update. Generated backups are kept in the persistent media volume by default. Persistent Docker volumes should also be included in the host backup policy.
+
+Update the checkout and rebuild the stack:
+
+```bash
 git pull
 docker compose up -d --build
+docker compose ps
+```
 
-The application will apply database migrations automatically during startup.
+Database migrations run automatically during startup. Review the web service logs after an update:
 
-Check the logs after updating: `docker compose logs --tail=100 web`
+```bash
+docker compose logs --tail=100 web
+```
 
-Before updating Doko or changing the production configuration, create a backup of the database and persistent volumes.
-You can create the database backup via the UI, inside `Instance settings`.
+## Development checks
+
+Backend tests run in the application container:
+
+```bash
+docker compose run --rm web python manage.py test core
+```
+
+Frontend validation runs from the `frontend` directory with Node.js 22:
+
+```bash
+npm ci
+npm run typecheck
+npm run lint
+npm run build
+```
+
+## Versioning
+
+Doko uses semantic version tags. Tagged releases are available on the [GitHub releases page](https://github.com/mosquitototo/Doko-project/releases). Review release notes and create a backup before moving between versions.
+
+## Support and license
+
+Use [GitHub Issues](https://github.com/mosquitototo/Doko-project/issues) for reproducible bugs and feature requests. Do not include credentials, tokens, investigation content or other sensitive data in an issue.
+
+Doko is released under the [MIT License](LICENSE).

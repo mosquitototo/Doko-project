@@ -13,6 +13,7 @@ export type RunnableConnectorEndpoint = {
   method: string;
   base_url: string;
   path_template: string;
+  body_template?: unknown;
   is_enabled: boolean;
 };
 
@@ -67,6 +68,7 @@ export type ConnectorEndpoint = {
   method: string;
   base_url: string;
   path_template: string;
+  body_template: unknown;
   headers: any;
   timeout_ms: number;
   is_enabled: boolean;

@@ -1,9 +1,9 @@
 from django.contrib import admin
-from .models import Event, TimelineItem, ActionRun
+from .models import Case, TimelineItem, ActionRun
 
 
-@admin.register(Event)
-class EventAdmin(admin.ModelAdmin):
+@admin.register(Case)
+class CaseAdmin(admin.ModelAdmin):
     list_display = ("title", "status", "owner", "created_at", "updated_at")
     list_filter = ("status", "created_at")
     search_fields = ("title", "description")
@@ -12,10 +12,10 @@ class EventAdmin(admin.ModelAdmin):
 
 @admin.register(TimelineItem)
 class TimelineItemAdmin(admin.ModelAdmin):
-    list_display = ("event", "date", "type", "created_at")
+    list_display = ("case", "date", "type", "created_at")
     list_filter = ("type", "date")
     search_fields = ("text",)
-    raw_id_fields = ("event",)
+    raw_id_fields = ("case",)
 
 
 @admin.register(ActionRun)

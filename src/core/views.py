@@ -1,13 +1,15 @@
 from datetime import date, datetime, timezone as dt_timezone
 from uuid import UUID
 from urllib.parse import urlparse
+from pathlib import PurePath
 import json
 import requests
 import uuid
+from PIL import Image, UnidentifiedImageError
 
 from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.shortcuts import get_object_or_404
-from django.db.models import Case, When, Value, IntegerField, Max, OuterRef, Subquery, DateTimeField, CharField, BooleanField, Q, F, Count
+from django.db.models import Case as DbCase, When, Value, IntegerField, Max, OuterRef, Subquery, DateTimeField, CharField, BooleanField, Q, F, Count
 from django.utils import timezone
 from django.utils.timezone import localtime
 from django.db.models.functions import Coalesce, Greatest
@@ -16,10 +18,11 @@ from django.conf import settings
 from django.utils.html import escape
 from django.core.files.base import ContentFile
 from django.core.exceptions import FieldError
+from django.db.models.deletion import ProtectedError
 from django.contrib.auth.password_validation import validate_password
 
 
-from rest_framework import generics, viewsets, mixins, status
+from rest_framework import generics, viewsets, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -32,7 +35,7 @@ from .audit import audit_event
 from .models import (
     Alert,
     AlertComment,
-    Event,
+    Case,
     TimelineItem,
     Comment,
     Attachment,
@@ -69,9 +72,9 @@ from .models import (
 
 from .serializers import (
     AlertSerializer,
-    EventSerializer,
-    EventDetailSerializer,
-    EventListSerializer,
+    CaseSerializer,
+    CaseDetailSerializer,
+    CaseListSerializer,
     TimelineItemSerializer,
     CommentSerializer,
     AttachmentSerializer,
@@ -107,9 +110,9 @@ from .serializers import (
     TaskCaseLinkSerializer,
 )
 
-from .permissions import IsOwnerOrMember, HasPermissionCode
-from .rbac import get_user_permissions, get_accessible_customer_ids
-from .reports_engine import render_report_html
+from .permissions import HasPermissionCode
+from .rbac import get_user_permission_codes_for_display, get_accessible_customer_ids, get_permitted_customer_ids, is_doko_admin, user_has_perm
+from .reports_engine import render_report_html, safe_report_url_fetcher
 from .outbound_proxy import build_outbound_proxies
 
 
@@ -214,6 +217,13 @@ def _truthy_param(request, name: str) -> bool:
     return (request.query_params.get(name) or "").strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def _hard_delete_or_validation_error(instance):
+    try:
+        instance.delete()
+    except ProtectedError as exc:
+        raise ValidationError({"detail": "This item is still referenced by other records."}) from exc
+
+
 def _apply_archived_filters(qs, request):
     include_archived = _truthy_param(request, "include_archived")
     archived_only = _truthy_param(request, "archived_only")
@@ -249,7 +259,7 @@ def me(request):
     if not getattr(u, "is_active", False):
         return Response({"detail": "User is inactive."}, status=status.HTTP_403_FORBIDDEN)
 
-    perms = sorted(list(get_user_permissions(u)))
+    perms = sorted(get_user_permission_codes_for_display(u))
 
     direct_roles = list(
         UserRole.objects.filter(user=u).select_related("role").values_list("role__name", flat=True)
@@ -266,10 +276,10 @@ def me(request):
             "id": u.id,
             "username": u.username,
             "email": u.email,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
             "timezone": profile.timezone,
             "avatar_url": avatar_url,
-            "permissions": ["*"] if u.is_staff else perms,
+            "permissions": ["*"] if is_doko_admin(u) else perms,
             "rbac_debug": {
                 "direct_roles": sorted(set([x for x in direct_roles if x])),
             },
@@ -320,7 +330,7 @@ def me_update(request):
             "id": u.id,
             "username": u.username,
             "email": u.email,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
             "timezone": profile.timezone,
             "avatar_url": avatar_url,
         },
@@ -328,49 +338,23 @@ def me_update(request):
     )
 
 
-def get_event_for_user_or_404(request, event_id):
-    qs = Event.objects.filter(is_deleted=False)
-
-    if request.user.is_staff:
-        return get_object_or_404(qs, id=event_id)
-
-    customer_ids = get_accessible_customer_ids(request.user)
-    qs = qs.filter(customer_id__in=customer_ids)
-
-    return get_object_or_404(
-        qs.filter(Q(owner=request.user) | Q(members=request.user)).distinct(),
-        id=event_id,
-    )
-
-
-def _check_case_access(request, event: Event):
+def _check_case_access(request, case: Case):
     if request.user.is_staff:
         return
     customer_ids = get_accessible_customer_ids(request.user)
-    if event.customer_id not in customer_ids:
+    if case.customer_id not in customer_ids:
         raise PermissionDenied("Case not accessible.")
     
 
-def _check_case_manage_access(request, event: Event):
-    _check_case_access(request, event)
-
-    if request.user.is_staff:
-        return
-
-    if event.owner_id == request.user.id:
-        return
-
-    if event.members.filter(id=request.user.id).exists():
-        return
-
-    raise PermissionDenied("Case not manageable.")
+def _check_case_manage_access(request, case: Case):
+    _check_case_access(request, case)
 
 
 def _str_or_empty(value) -> str:
     return str(value) if value else ""
 
 
-def _audit_case_meta(case: Event, extra: dict | None = None) -> dict:
+def _audit_case_meta(case: Case, extra: dict | None = None) -> dict:
     data = {
         "case_id": _str_or_empty(getattr(case, "id", None)),
         "case_number": getattr(case, "case_number", None),
@@ -381,7 +365,7 @@ def _audit_case_meta(case: Event, extra: dict | None = None) -> dict:
     return data
 
 
-def _case_alert_sources_for_automation(case: Event) -> list[str]:
+def _case_alert_sources_for_automation(case: Case) -> list[str]:
     sources = []
     seen = set()
 
@@ -610,7 +594,7 @@ def _build_case_exchange_payload_from_alert_item(*, alert: Alert, item: dict, id
 
 
 def _dispatch_materialized_case_exchange_events(case_id: str, exchange_id: str, actor):
-    case = Event.objects.filter(id=case_id, is_deleted=False).first()
+    case = Case.objects.filter(id=case_id, is_deleted=False).first()
     if not case:
         return
 
@@ -643,7 +627,7 @@ def _dispatch_materialized_case_exchange_events(case_id: str, exchange_id: str, 
     )
 
 
-def _materialize_alert_case_exchanges(*, case: Event, alert: Alert, actor, request=None) -> int:
+def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, request=None) -> int:
     created_count = 0
     items = _get_alert_case_exchange_items(alert)
 
@@ -702,7 +686,7 @@ def _materialize_alert_case_exchanges(*, case: Event, alert: Alert, actor, reque
         created_count += 1
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             alert=alert,
             date=date.today(),
             type="case_exchange_created",
@@ -811,43 +795,6 @@ class UserLiteListView(generics.ListAPIView):
 ###############
 ### Alerts
 ###############
-class AlertViewSet(
-    mixins.CreateModelMixin,
-    mixins.ListModelMixin,
-    mixins.RetrieveModelMixin,
-    viewsets.GenericViewSet,
-):
-    serializer_class = AlertSerializer
-    def get_permissions(self):
-        if getattr(self, "action", None) == "create":
-            self.required_permission = "alert.add"
-        else:
-            self.required_permission = "alert.view"
-        return super().get_permissions()
-
-    def get_queryset(self):
-        qs = Alert.objects.filter(is_deleted=False).order_by("-created_at")
-        if self.request.user.is_staff:
-            return qs
-        customer_ids = get_accessible_customer_ids(self.request.user)
-        return qs.filter(customer_id__in=customer_ids)
-
-    serializer_class = AlertSerializer
-    permission_classes = [IsAuthenticated, HasPermissionCode]
-
-    def perform_create(self, serializer):
-        inst = serializer.save(created_by=self.request.user)
-
-        audit_event(
-            self.request,
-            action="alert.created",
-            object_type="alert",
-            object_id=str(inst.id),
-            object_repr=inst.title or "",
-            metadata={"status": getattr(inst, "status", None), "customer_id": str(getattr(inst, "customer_id", "") or "")},
-        )
-
-
 class AlertListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     serializer_class = AlertSerializer
@@ -866,7 +813,7 @@ class AlertListCreateView(generics.ListCreateAPIView):
         )
 
         if not user.is_staff:
-            customer_ids = get_accessible_customer_ids(user)
+            customer_ids = get_permitted_customer_ids(user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
 
         search = (self.request.query_params.get("search") or "").strip()
@@ -973,9 +920,8 @@ class AlertListCreateView(generics.ListCreateAPIView):
         
         owner = requested_owner if requested_owner and user.is_staff else user
         if not user.is_staff:
-            allowed = set(str(x) for x in get_accessible_customer_ids(user))
             cust = serializer.validated_data.get("customer", None)
-            if cust is not None and str(getattr(cust, "id", "")) not in allowed:
+            if cust is not None and not user_has_perm(user, "alert.add", customer_id=cust.id):
                 raise PermissionDenied("Customer not accessible.")
     
         event = serializer.save(owner=owner)
@@ -1011,38 +957,25 @@ class AlertListCreateView(generics.ListCreateAPIView):
         )
 
 
-class AlertRetrieveView(generics.RetrieveAPIView):
-    permission_classes = [IsAuthenticated, HasPermissionCode]
-    required_permission = "alert.view"
-    serializer_class = AlertSerializer
-
-    def get_queryset(self):
-        qs = Alert.objects.filter(is_deleted=False)
-        if self.request.user.is_staff:
-            return qs
-        customer_ids = get_accessible_customer_ids(self.request.user)
-        return qs.filter(customer_id__in=customer_ids)
-
-
-class AlertListForEventView(generics.ListAPIView):
+class AlertListForCaseView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "case.view"
     serializer_class = AlertSerializer
-    event_id_kwarg = "event_id"
+    case_id_kwarg = "case_id"
 
-    def get_event(self):
-        event_id = self.kwargs["event_id"]
-        qs = Event.objects.filter(is_deleted=False)
+    def get_case(self):
+        case_id = self.kwargs["case_id"]
+        qs = Case.objects.filter(is_deleted=False)
         if not self.request.user.is_staff:
-            customer_ids = get_accessible_customer_ids(self.request.user)
+            customer_ids = get_permitted_customer_ids(self.request.user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
-        event = get_object_or_404(qs, id=event_id)
-        _check_case_access(self.request, event)
-        return event
+        case = get_object_or_404(qs, id=case_id)
+        _check_case_access(self.request, case)
+        return case
 
     def get_queryset(self):
-        event = self.get_event()
-        return Alert.objects.filter(case=event, is_deleted=False).order_by("-created_at")
+        case = self.get_case()
+        return Alert.objects.filter(case=case, is_deleted=False).order_by("-created_at")
 
 
 class AlertEscalateToCaseView(APIView):
@@ -1090,7 +1023,7 @@ class AlertEscalateToCaseView(APIView):
         case_description = _join_alert_descriptions(alerts)
 
         with transaction.atomic():
-            case = Event.objects.create(
+            case = Case.objects.create(
                 title=case_title,
                 description=case_description,
                 status="open",
@@ -1101,7 +1034,7 @@ class AlertEscalateToCaseView(APIView):
             )
 
             TimelineItem.objects.create(
-                event=case,
+                case=case,
                 date=date.today(),
                 type="case_created",
                 text="Case created (from alert escalation)",
@@ -1136,7 +1069,7 @@ class AlertEscalateToCaseView(APIView):
                 )
 
                 TimelineItem.objects.create(
-                    event=case,
+                    case=case,
                     alert=alert,
                     date=date.today(),
                     type="alert_linked",
@@ -1176,6 +1109,17 @@ class AlertEscalateToCaseView(APIView):
                 "created_from_alert_escalation": True,
             },
         )
+        _run_automation_safely(
+            scope="case",
+            target=case,
+            event="case.created_from_alert_escalation",
+            actor=request.user,
+            data={
+                "alert_ids": [str(a.id) for a in alerts],
+                "source_alert_id": str(base_alert.id),
+                "created_from_alert_escalation": True,
+            },
+        )
 
         return Response(
             {
@@ -1206,7 +1150,7 @@ class AlertLinkToCaseView(APIView):
 
             alert = get_object_or_404(alert_qs)
 
-            case_qs = Event.objects.select_for_update().filter(pk=case_id, is_deleted=False)
+            case_qs = Case.objects.select_for_update().filter(pk=case_id, is_deleted=False)
             if not request.user.is_staff:
                 customer_ids = get_accessible_customer_ids(request.user)
                 case_qs = case_qs.filter(customer_id__in=customer_ids)
@@ -1234,7 +1178,7 @@ class AlertLinkToCaseView(APIView):
                 transaction.on_commit(
                     lambda case_id=str(case.id), actor=request.user, sources=case_sources_after, alert_id=str(alert.id): _run_automation_safely(
                         scope="case",
-                        target=Event.objects.get(id=case_id),
+                        target=Case.objects.get(id=case_id),
                         event="case.alert_linked",
                         actor=actor,
                         data={
@@ -1307,7 +1251,7 @@ class AlertLinkToCaseView(APIView):
             )
 
             TimelineItem.objects.create(
-                event=case,
+                case=case,
                 alert=alert,
                 date=date.today(),
                 type="alert_linked",
@@ -1333,7 +1277,7 @@ class AlertLinkToCaseView(APIView):
             transaction.on_commit(
                 lambda case_id=str(case.id), actor=request.user, before_sources=case_sources_before, after_sources=case_sources_after, alert_id=str(alert.id): _run_automation_safely(
                     scope="case",
-                    target=Event.objects.get(id=case_id),
+                    target=Case.objects.get(id=case_id),
                     event="case.alert_linked",
                     actor=actor,
                     data={
@@ -1386,33 +1330,19 @@ class AlertRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
         return qs.filter(customer_id__in=customer_ids)
 
     def perform_destroy(self, instance):
-        instance.is_deleted = True
-        instance.deleted_at = timezone.now()
-        instance.save(update_fields=["is_deleted", "deleted_at"])
+        object_id = str(instance.id)
+        object_repr = instance.title or ""
+        metadata = _audit_alert_meta(instance, {"hard": True})
+        instance.delete()
 
         audit_event(
             self.request,
             action="alert.deleted",
             object_type="alert",
-            object_id=str(instance.id),
-            object_repr=instance.title or "",
-            metadata=_audit_alert_meta(
-                instance,
-                {
-                    "soft": True,
-                },
-            ),
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata=metadata,
         )
-
-        if getattr(instance, "case_id", None):
-            TimelineItem.objects.create(
-                event=instance.case,
-                alert=instance,
-                date=date.today(),
-                type="alert_deleted",
-                text=f"Alert deleted: {instance.title}",
-                actor=self.request.user,
-            )
 
     def perform_update(self, serializer):
         inst = serializer.instance
@@ -1432,8 +1362,7 @@ class AlertRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
         if not self.request.user.is_staff and "customer" in serializer.validated_data:
             customer = serializer.validated_data.get("customer")
-            allowed = set(str(x) for x in get_accessible_customer_ids(self.request.user))
-            if customer and str(customer.id) not in allowed:
+            if customer and not user_has_perm(self.request.user, "alert.update", customer_id=customer.id):
                 raise PermissionDenied("Customer not accessible.")
 
         updated = serializer.save()
@@ -1484,7 +1413,7 @@ class AlertRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
         if getattr(updated, "case_id", None):
             TimelineItem.objects.create(
-                event=updated.case,
+                case=updated.case,
                 alert=updated,
                 date=date.today(),
                 type="alert_updated",
@@ -1521,7 +1450,7 @@ class AlertUnmergeView(APIView):
             alert.save(update_fields=["case", "status", "status_before_merge"])
 
             TimelineItem.objects.create(
-                event=case_event,
+                case=case_event,
                 alert=alert,
                 date=date.today(),
                 type="alert_unmerged",
@@ -1546,7 +1475,7 @@ class AlertUnmergeView(APIView):
             transaction.on_commit(
                 lambda case_id=str(case_event.id), actor=request.user, before_sources=case_sources_before, after_sources=case_sources_after, alert_id=str(alert.id): _run_automation_safely(
                     scope="case",
-                    target=Event.objects.get(id=case_id),
+                    target=Case.objects.get(id=case_id),
                     event="case.alert_unmerged",
                     actor=actor,
                     data={
@@ -1586,44 +1515,21 @@ class AlertDeleteView(APIView):
                 pk=pk,
             )
 
-        if (
-            not request.user.is_staff
-            and alert.created_by_id != request.user.id
-            and not alert.members.filter(id=request.user.id).exists()
-        ):
-            raise PermissionDenied("Access denied.")
-
-        case_event = alert.case
-        alert.is_deleted = True
-        alert.deleted_at = timezone.now()
-        alert.save(update_fields=["is_deleted", "deleted_at"])
+        alert_id = str(alert.id)
+        alert_title = alert.title or ""
+        metadata = _audit_alert_meta(alert, {"hard": True, "via": "alert.delete.endpoint"})
+        alert.delete()
 
         audit_event(
             request,
             action="alert.deleted",
             object_type="alert",
-            object_id=str(alert.id),
-            object_repr=alert.title or "",
-            metadata=_audit_alert_meta(
-                alert,
-                {
-                    "soft": True,
-                    "via": "alert.delete.endpoint",
-                },
-            ),
+            object_id=alert_id,
+            object_repr=alert_title,
+            metadata=metadata,
         )
 
-        if case_event:
-            TimelineItem.objects.create(
-                event=case_event,
-                alert=alert,
-                date=date.today(),
-                type="alert_deleted",
-                text=f"Alert deleted: {alert.title}",
-                actor=request.user,
-            )
-
-        return Response({"alert_id": str(alert.id), "deleted": True}, status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AlertCommentListCreateForAlertView(generics.ListCreateAPIView):
@@ -1783,13 +1689,13 @@ def apply_case_template_to_payload(data: dict, tpl) -> dict:
     return data
 
 
-def create_workbook_instance_for_event(event: Event, template: WorkbookTemplate | None):
+def create_workbook_instance_for_case(case: Case, template: WorkbookTemplate | None):
     if template is None:
-        WorkbookInstance.objects.get_or_create(event=event, defaults={"template": None})
+        WorkbookInstance.objects.get_or_create(case=case, defaults={"template": None})
         return
 
     inst, created = WorkbookInstance.objects.get_or_create(
-        event=event,
+        case=case,
         defaults={"template": template},
     )
     if not created:
@@ -1807,8 +1713,8 @@ def create_workbook_instance_for_event(event: Event, template: WorkbookTemplate 
     ])
 
 
-class EventListCreateView(generics.ListCreateAPIView):
-    serializer_class = EventSerializer
+class CaseListCreateView(generics.ListCreateAPIView):
+    serializer_class = CaseSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
     filter_backends = []
 
@@ -1818,17 +1724,17 @@ class EventListCreateView(generics.ListCreateAPIView):
 
     def get_serializer_class(self):
         if self.request.method == "GET":
-            return EventListSerializer
-        return EventSerializer
+            return CaseListSerializer
+        return CaseSerializer
     
     def get_queryset(self):
         user = self.request.user
-        qs = Event.objects.filter(is_deleted=False)
+        qs = Case.objects.filter(is_deleted=False)
 
         recent_limit = timezone.now() - timezone.timedelta(hours=24)
 
         latest_comment_created_at = Comment.objects.filter(
-            event_id=OuterRef("pk")
+            case_id=OuterRef("pk")
         ).order_by("-created_at").values("created_at")[:1]
 
         latest_inbound_exchange_created_at = CaseExchange.objects.filter(
@@ -1843,7 +1749,7 @@ class EventListCreateView(generics.ListCreateAPIView):
         ).order_by("-created_at").values("created_at")[:1]
 
         last_viewed_at = CaseUserState.objects.filter(
-            event_id=OuterRef("pk"),
+            case_id=OuterRef("pk"),
             user_id=self.request.user.id,
         ).values("last_viewed_at")[:1]
 
@@ -1884,7 +1790,7 @@ class EventListCreateView(generics.ListCreateAPIView):
         )
 
         qs = qs.annotate(
-            recent_activity_kind=Case(
+            recent_activity_kind=DbCase(
                 When(
                     latest_auto_followup_exchange_created_at__isnull=False,
                     recent_activity_at=F("latest_auto_followup_exchange_created_at"),
@@ -1906,7 +1812,7 @@ class EventListCreateView(generics.ListCreateAPIView):
         )
 
         qs = qs.annotate(
-            has_recent_activity=Case(
+            has_recent_activity=DbCase(
                 When(
                     Q(recent_activity_at__isnull=False)
                     & Q(recent_activity_at__gte=recent_limit)
@@ -1949,7 +1855,7 @@ class EventListCreateView(generics.ListCreateAPIView):
             qs = qs.filter(customer_id=customer_id)
 
         if not user.is_staff:
-            customer_ids = get_accessible_customer_ids(user)
+            customer_ids = get_permitted_customer_ids(user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
 
         search = (self.request.query_params.get("search") or "").strip()
@@ -1971,17 +1877,17 @@ class EventListCreateView(generics.ListCreateAPIView):
                 v = (value or "").strip()
                 if not v:
                     continue
-                if v == Event.Status.ARCHIVED:
+                if v == Case.Status.ARCHIVED:
                     wants_archived = True
                 else:
                     normalized_statuses.append(v)
 
             if wants_archived and normalized_statuses:
                 qs = qs.filter(
-                    Q(status__in=normalized_statuses) | Q(status=Event.Status.ARCHIVED)
+                    Q(status__in=normalized_statuses) | Q(status=Case.Status.ARCHIVED)
                 )
             elif wants_archived:
-                qs = qs.filter(status=Event.Status.ARCHIVED)
+                qs = qs.filter(status=Case.Status.ARCHIVED)
             else:
                 qs = qs.filter(status__in=normalized_statuses)
 
@@ -2008,12 +1914,12 @@ class EventListCreateView(generics.ListCreateAPIView):
         if owner_ids:
             qs = qs.filter(owner_id__in=owner_ids)
 
-        status_order = Case(
-            When(status=Event.Status.OPEN, then=Value(0)),
-            When(status=Event.Status.IN_PROGRESS, then=Value(1)),
-            When(status=Event.Status.RESOLVED, then=Value(2)),
-            When(status=Event.Status.CLOSED, then=Value(3)),
-            When(status=Event.Status.ARCHIVED, then=Value(4)),
+        status_order = DbCase(
+            When(status=Case.Status.OPEN, then=Value(0)),
+            When(status=Case.Status.IN_PROGRESS, then=Value(1)),
+            When(status=Case.Status.RESOLVED, then=Value(2)),
+            When(status=Case.Status.CLOSED, then=Value(3)),
+            When(status=Case.Status.ARCHIVED, then=Value(4)),
             default=Value(99),
             output_field=IntegerField(),
         )
@@ -2075,9 +1981,8 @@ class EventListCreateView(generics.ListCreateAPIView):
         owner = requested_owner if requested_owner and user.is_staff else user
 
         if not user.is_staff:
-            allowed = set(str(x) for x in get_accessible_customer_ids(user))
             cust = serializer.validated_data.get("customer", None)
-            if cust is not None and str(getattr(cust, "id", "")) not in allowed:
+            if cust is not None and not user_has_perm(user, "case.add", customer_id=cust.id):
                 raise PermissionDenied("Customer not accessible.")
 
         event = serializer.save(owner=owner)
@@ -2093,10 +1998,10 @@ class EventListCreateView(generics.ListCreateAPIView):
             wb = WorkbookTemplate.objects.filter(
                 id=workbook_template_id, is_active=True
             ).first()
-            create_workbook_instance_for_event(event, wb)
+            create_workbook_instance_for_case(event, wb)
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="case_created",
             text="Case created",
@@ -2129,15 +2034,9 @@ class EventListCreateView(generics.ListCreateAPIView):
         )
 
 
-class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
-    permission_classes = [IsAuthenticated, IsOwnerOrMember, HasPermissionCode]
+class CaseRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticated, HasPermissionCode]
     http_method_names = ["get", "patch", "put", "delete"]
-
-    def get_permissions(self):
-        if self.request.method == "GET":
-            return [IsAuthenticated(), HasPermissionCode()]
-
-        return [IsAuthenticated(), IsOwnerOrMember(), HasPermissionCode()]
 
     def initial(self, request, *args, **kwargs):
         if request.method == "DELETE":
@@ -2150,26 +2049,28 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Event.objects.filter(is_deleted=False)
+        qs = Case.objects.filter(is_deleted=False)
 
         if user.is_staff:
             return qs
 
-        customer_ids = get_accessible_customer_ids(user)
+        customer_ids = get_permitted_customer_ids(user, self.required_permission)
         qs = qs.filter(customer_id__in=customer_ids)
 
-        if self.request.method == "GET":
-            return qs
-
-        return qs.filter(Q(owner=user) | Q(members=user)).distinct()
+        return qs
 
     def get_serializer_class(self):
         if self.request.method == "GET":
-            return EventDetailSerializer
-        return EventSerializer
+            return CaseDetailSerializer
+        return CaseSerializer
 
     def perform_update(self, serializer):
         event = self.get_object()
+        requested_customer = serializer.validated_data.get("customer")
+        if requested_customer and requested_customer.id != event.customer_id:
+            if not user_has_perm(self.request.user, "case.update", customer_id=requested_customer.id):
+                raise PermissionDenied("The destination customer is not accessible.")
+
         old_status = event.status
         old_title = event.title
         old_description = event.description
@@ -2189,36 +2090,36 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             "owner_id": getattr(event, "owner_id", None),
         }
 
-        updated_event = serializer.save()
+        updated_case = serializer.save()
 
-        new_iocs = list(updated_event.iocs or [])
-        new_assets = list(updated_event.assets or [])
+        new_iocs = list(updated_case.iocs or [])
+        new_assets = list(updated_case.assets or [])
 
         after = {
-            "title": getattr(updated_event, "title", None),
-            "description": getattr(updated_event, "description", None),
-            "status": getattr(updated_event, "status", None),
-            "severity": getattr(updated_event, "severity", None),
-            "classification": getattr(updated_event, "classification", None),
-            "outcome": getattr(updated_event, "outcome", None),
-            "customer_id": str(getattr(updated_event, "customer_id", "") or ""),
+            "title": getattr(updated_case, "title", None),
+            "description": getattr(updated_case, "description", None),
+            "status": getattr(updated_case, "status", None),
+            "severity": getattr(updated_case, "severity", None),
+            "classification": getattr(updated_case, "classification", None),
+            "outcome": getattr(updated_case, "outcome", None),
+            "customer_id": str(getattr(updated_case, "customer_id", "") or ""),
             "iocs": new_iocs,
             "assets": new_assets,
-            "owner_id": getattr(updated_event, "owner_id", None),
+            "owner_id": getattr(updated_case, "owner_id", None),
         }
 
-        if old_status != updated_event.status:
+        if old_status != updated_case.status:
             TimelineItem.objects.create(
-                event=updated_event,
+                case=updated_case,
                 date=date.today(),
                 type="status_changed",
-                text=f"Case status updated : {old_status} → {updated_event.status}",
+                text=f"Case status updated : {old_status} → {updated_case.status}",
                 actor=self.request.user,
             )
 
-        if old_title != updated_event.title or old_description != updated_event.description:
+        if old_title != updated_case.title or old_description != updated_case.description:
             TimelineItem.objects.create(
-                event=updated_event,
+                case=updated_case,
                 date=date.today(),
                 type="case_updated",
                 text="Case updated",
@@ -2227,7 +2128,7 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
         if old_iocs != new_iocs:
             TimelineItem.objects.create(
-                event=updated_event,
+                case=updated_case,
                 date=date.today(),
                 type="case_updated",
                 text="IoCs updated",
@@ -2238,10 +2139,10 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
                 self.request,
                 action="case.iocs_updated",
                 object_type="case",
-                object_id=str(updated_event.id),
-                object_repr=updated_event.title or "",
+                object_id=str(updated_case.id),
+                object_repr=updated_case.title or "",
                 metadata=_audit_case_meta(
-                    updated_event,
+                    updated_case,
                     {
                         "updated_section": "iocs",
                         "content_redacted": True,
@@ -2251,7 +2152,7 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
         if old_assets != new_assets:
             TimelineItem.objects.create(
-                event=updated_event,
+                case=updated_case,
                 date=date.today(),
                 type="case_updated",
                 text="Assets updated",
@@ -2262,10 +2163,10 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
                 self.request,
                 action="case.assets_updated",
                 object_type="case",
-                object_id=str(updated_event.id),
-                object_repr=updated_event.title or "",
+                object_id=str(updated_case.id),
+                object_repr=updated_case.title or "",
                 metadata=_audit_case_meta(
-                    updated_event,
+                    updated_case,
                     {
                         "updated_section": "assets",
                         "content_redacted": True,
@@ -2278,16 +2179,16 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             self.request,
             action="case.updated",
             object_type="case",
-            object_id=str(updated_event.id),
-            object_repr=updated_event.title or "",
+            object_id=str(updated_case.id),
+            object_repr=updated_case.title or "",
             metadata=_audit_case_meta(
-                updated_event,
+                updated_case,
                 {
                     "updated_sections": [
                         section
                         for section, changed in {
-                            "summary": old_title != updated_event.title or old_description != updated_event.description,
-                            "status": old_status != updated_event.status,
+                            "summary": old_title != updated_case.title or old_description != updated_case.description,
+                            "status": old_status != updated_case.status,
                             "iocs": old_iocs != new_iocs,
                             "assets": old_assets != new_assets,
                         }.items()
@@ -2301,7 +2202,7 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
         _run_automation_safely(
             scope="case",
-            target=updated_event,
+            target=updated_case,
             event="case.updated",
             actor=self.request.user,
             data={
@@ -2323,7 +2224,7 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             for added_ioc in added_payload.get("added_iocs", []):
                 _run_automation_safely(
                     scope="case",
-                    target=updated_event,
+                    target=updated_case,
                     event="case.ioc_added",
                     actor=self.request.user,
                     data={
@@ -2336,7 +2237,7 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             for added_asset in added_payload.get("added_assets", []):
                 _run_automation_safely(
                     scope="case",
-                    target=updated_event,
+                    target=updated_case,
                     event="case.asset_added",
                     actor=self.request.user,
                     data={
@@ -2350,31 +2251,18 @@ class EventRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
 
     def perform_destroy(self, instance):
-        instance.is_deleted = True
-        instance.deleted_at = timezone.now()
-        instance.save(update_fields=["is_deleted", "deleted_at"])
-
-        TimelineItem.objects.create(
-            event=instance,
-            date=date.today(),
-            type="case_deleted",
-            text=f"Case deleted: {instance.title}",
-            actor=self.request.user,
-        )
+        object_id = str(instance.id)
+        object_repr = instance.title or ""
+        metadata = _audit_case_meta(instance, {"hard": True, "via": "case.detail.delete"})
+        instance.delete()
 
         audit_event(
             self.request,
             action="case.deleted",
             object_type="case",
-            object_id=str(instance.id),
-            object_repr=instance.title or "",
-            metadata=_audit_case_meta(
-                instance,
-                {
-                    "soft": True,
-                    "via": "case.detail.delete",
-                },
-            ),
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata=metadata,
         )
 
 
@@ -2384,17 +2272,17 @@ class CaseMarkViewedView(APIView):
 
     def post(self, request, pk):
         if request.user.is_staff:
-            event = get_object_or_404(Event.objects.filter(is_deleted=False), id=pk)
+            event = get_object_or_404(Case.objects.filter(is_deleted=False), id=pk)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             event = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 id=pk,
             )
             _check_case_access(request, event)
 
         state, _ = CaseUserState.objects.get_or_create(
-            event=event,
+            case=event,
             user=request.user,
             defaults={"last_viewed_at": timezone.now()},
         )
@@ -2431,7 +2319,7 @@ class CaseListLiteView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
 
-        qs = Event.objects.filter(is_deleted=False)
+        qs = Case.objects.filter(is_deleted=False)
 
         qs = _apply_archived_filters(qs, self.request)
 
@@ -2461,49 +2349,29 @@ class CaseDeleteView(APIView):
 
     def post(self, request, pk):
         if request.user.is_staff:
-            case = get_object_or_404(Event.objects.filter(is_deleted=False), pk=pk)
+            case = get_object_or_404(Case.objects.filter(is_deleted=False), pk=pk)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             case = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 pk=pk,
             )
 
-        if (
-            not request.user.is_staff
-            and case.owner_id != request.user.id
-            and not case.members.filter(id=request.user.id).exists()
-        ):
-            raise PermissionDenied("Access denied.")
-
-        case.is_deleted = True
-        case.deleted_at = timezone.now()
-        case.save(update_fields=["is_deleted", "deleted_at"])
-
-        TimelineItem.objects.create(
-            event=case,
-            date=date.today(),
-            type="case_deleted",
-            text=f"Case deleted: {case.title}",
-            actor=request.user,
-        )
+        case_id = str(case.id)
+        case_title = case.title or ""
+        metadata = _audit_case_meta(case, {"hard": True, "via": "case.delete.endpoint"})
+        case.delete()
 
         audit_event(
             request,
             action="case.deleted",
             object_type="case",
-            object_id=str(case.id),
-            object_repr=case.title or "",
-            metadata=_audit_case_meta(
-                case,
-                {
-                    "soft": True,
-                    "via": "case.delete.endpoint",
-                },
-            ),
+            object_id=case_id,
+            object_repr=case_title,
+            metadata=metadata,
         )
 
-        return Response({"case_id": str(case.id), "deleted": True}, status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class CaseArchiveView(APIView):
@@ -2512,35 +2380,28 @@ class CaseArchiveView(APIView):
 
     def post(self, request, pk):
         if request.user.is_staff:
-            event = get_object_or_404(Event.objects.filter(is_deleted=False), id=pk)
+            event = get_object_or_404(Case.objects.filter(is_deleted=False), id=pk)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             event = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 id=pk,
             )
-
-        if (
-            not request.user.is_staff
-            and event.owner_id != request.user.id
-            and not event.members.filter(id=request.user.id).exists()
-        ):
-            raise PermissionDenied("Case not found.")
 
         updated_fields = []
         if not getattr(event, "archived_at", None):
             event.archived_at = timezone.now()
             updated_fields.append("archived_at")
 
-        if getattr(event, "status", None) != Event.Status.ARCHIVED:
-            event.status = Event.Status.ARCHIVED
+        if getattr(event, "status", None) != Case.Status.ARCHIVED:
+            event.status = Case.Status.ARCHIVED
             updated_fields.append("status")
 
         if updated_fields:
             event.save(update_fields=updated_fields)
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=timezone.now().date(),
             type="case_archived",
             text="Case archived",
@@ -2565,20 +2426,13 @@ class CaseUnarchiveView(APIView):
 
     def post(self, request, pk):
         if request.user.is_staff:
-            event = get_object_or_404(Event.objects.filter(is_deleted=False), id=pk)
+            event = get_object_or_404(Case.objects.filter(is_deleted=False), id=pk)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             event = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 id=pk,
             )
-
-        if (
-            not request.user.is_staff
-            and event.owner_id != request.user.id
-            and not event.members.filter(id=request.user.id).exists()
-        ):
-            raise PermissionDenied("Case not found.")
 
         now = timezone.now()
         updated_fields = []
@@ -2590,15 +2444,15 @@ class CaseUnarchiveView(APIView):
         event.unarchived_at = now
         updated_fields.append("unarchived_at")
 
-        if getattr(event, "status", None) == Event.Status.ARCHIVED:
-            event.status = Event.Status.CLOSED
+        if getattr(event, "status", None) == Case.Status.ARCHIVED:
+            event.status = Case.Status.CLOSED
             updated_fields.append("status")
 
         if updated_fields:
             event.save(update_fields=updated_fields)
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=now.date(),
             type="case_unarchived",
             text="Case unarchived",
@@ -2621,33 +2475,33 @@ class CaseUnarchiveView(APIView):
 ###############
 ### Activity
 ###############
-class TimelineItemListCreateForEventView(generics.ListCreateAPIView):
+class TimelineItemListCreateForCaseView(generics.ListCreateAPIView):
     serializer_class = TimelineItemSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
-    event_id_kwarg = "event_id"
+    case_id_kwarg = "case_id"
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "case.view" if request.method == "GET" else "case.update"
         super().initial(request, *args, **kwargs)
 
-    def get_event(self) -> Event:
-        event_id = self.kwargs["event_id"]
-        qs = Event.objects.filter(is_deleted=False)
+    def get_case(self) -> Case:
+        case_id = self.kwargs["case_id"]
+        qs = Case.objects.filter(is_deleted=False)
         if not self.request.user.is_staff:
-            customer_ids = get_accessible_customer_ids(self.request.user)
+            customer_ids = get_permitted_customer_ids(self.request.user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
-        event = get_object_or_404(qs, id=event_id)
+        event = get_object_or_404(qs, id=case_id)
         _check_case_access(self.request, event)
         return event
 
     def get_queryset(self):
-        event = self.get_event()
-        return TimelineItem.objects.filter(event=event).order_by("date", "created_at")
+        event = self.get_case()
+        return TimelineItem.objects.filter(case=event).order_by("date", "created_at")
 
     def perform_create(self, serializer):
-        event = self.get_event()
+        event = self.get_case()
         _check_case_manage_access(self.request, event)
-        inst = serializer.save(event=event)
+        inst = serializer.save(case=event)
 
         audit_event(
             self.request,
@@ -2679,13 +2533,13 @@ class TimelineItemRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
             return qs
         customer_ids = get_accessible_customer_ids(user)
         return qs.filter(
-            Q(event__customer_id__in=customer_ids),
-            Q(event__owner=user) | Q(event__members=user),
+            Q(case__customer_id__in=customer_ids),
+            Q(case__owner=user) | Q(case__members=user),
         ).distinct()
 
     def perform_update(self, serializer):
         item = serializer.instance
-        _check_case_manage_access(self.request, item.event)
+        _check_case_manage_access(self.request, item.case)
 
         inst = serializer.save()
         audit_event(
@@ -2694,11 +2548,11 @@ class TimelineItemRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
             object_type="timeline_item",
             object_id=str(inst.id),
             object_repr=(getattr(inst, "type", "") or "")[:80],
-            metadata={"event_id": str(getattr(inst, "event_id", "") or "")},
+            metadata={"case_id": str(getattr(inst, "case_id", "") or "")},
         )
 
     def perform_destroy(self, instance):
-        _check_case_manage_access(self.request, instance.event)
+        _check_case_manage_access(self.request, instance.case)
 
         audit_event(
             self.request,
@@ -2706,7 +2560,7 @@ class TimelineItemRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
             object_type="timeline_item",
             object_id=str(instance.id),
             object_repr=(getattr(instance, "type", "") or "")[:80],
-            metadata={"event_id": str(getattr(instance, "event_id", "") or "")},
+            metadata={"case_id": str(getattr(instance, "case_id", "") or "")},
         )
         return super().perform_destroy(instance)
 
@@ -2714,29 +2568,29 @@ class TimelineItemRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
 ###############
 ### Comments
 ###############
-class CommentListCreateForEventView(generics.ListCreateAPIView):
+class CommentListCreateForCaseView(generics.ListCreateAPIView):
     serializer_class = CommentSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
-    event_id_kwarg = "event_id"
+    case_id_kwarg = "case_id"
     pagination_class = None
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "case.view" if request.method == "GET" else "case.update"
         super().initial(request, *args, **kwargs)
 
-    def get_event(self) -> Event:
-        event_id = self.kwargs["event_id"]
-        qs = Event.objects.filter(is_deleted=False)
+    def get_case(self) -> Case:
+        case_id = self.kwargs["case_id"]
+        qs = Case.objects.filter(is_deleted=False)
         if not self.request.user.is_staff:
             customer_ids = get_accessible_customer_ids(self.request.user)
             qs = qs.filter(customer_id__in=customer_ids)
-        event = get_object_or_404(qs, id=event_id)
+        event = get_object_or_404(qs, id=case_id)
         _check_case_access(self.request, event)
         return event
 
     def get_queryset(self):
-        event = self.get_event()
-        return Comment.objects.filter(event=event).order_by("created_at")
+        event = self.get_case()
+        return Comment.objects.filter(case=event).order_by("created_at")
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()
@@ -2744,12 +2598,12 @@ class CommentListCreateForEventView(generics.ListCreateAPIView):
         return Response(data, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
-        event = self.get_event()
+        event = self.get_case()
         _check_case_manage_access(self.request, event)
-        inst = serializer.save(event=event, author=self.request.user)
+        inst = serializer.save(case=event, author=self.request.user)
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="comment_added",
             text="Comment added",
@@ -2787,13 +2641,13 @@ class CommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             return qs
         customer_ids = get_accessible_customer_ids(user)
         return qs.filter(
-            Q(event__customer_id__in=customer_ids),
-            Q(event__owner=user) | Q(event__members=user),
+            Q(case__customer_id__in=customer_ids),
+            Q(case__owner=user) | Q(case__members=user),
         ).distinct()
 
     def perform_update(self, serializer):
         inst = serializer.instance
-        event = inst.event
+        event = inst.case
         _check_case_manage_access(self.request, event)
 
         before = {
@@ -2803,7 +2657,7 @@ class CommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
         obj = serializer.save()
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="comment_updated",
             text="Comment updated",
@@ -2827,14 +2681,14 @@ class CommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
         )
 
     def perform_destroy(self, instance):
-        event = instance.event
+        event = instance.case
         _check_case_manage_access(self.request, event)
 
         cid = str(instance.id)
         instance.delete()
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="comment_deleted",
             text="Comment delete",
@@ -2860,29 +2714,29 @@ class CommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 ###############
 ### Attachments
 ###############
-class AttachmentListCreateForEventView(generics.ListCreateAPIView):
+class AttachmentListCreateForCaseView(generics.ListCreateAPIView):
     serializer_class = AttachmentSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
     parser_classes = [MultiPartParser, FormParser]
-    event_id_kwarg = "event_id"
+    case_id_kwarg = "case_id"
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "case.view" if request.method == "GET" else "case.update"
         super().initial(request, *args, **kwargs)
 
-    def get_event(self) -> Event:
-        event_id = self.kwargs["event_id"]
-        qs = Event.objects.filter(is_deleted=False)
+    def get_case(self) -> Case:
+        case_id = self.kwargs["case_id"]
+        qs = Case.objects.filter(is_deleted=False)
         if not self.request.user.is_staff:
             customer_ids = get_accessible_customer_ids(self.request.user)
             qs = qs.filter(customer_id__in=customer_ids)
-        event = get_object_or_404(qs, id=event_id)
+        event = get_object_or_404(qs, id=case_id)
         _check_case_access(self.request, event)
         return event
 
     def get_queryset(self):
-        event = self.get_event()
-        return Attachment.objects.filter(event=event).order_by("created_at")
+        event = self.get_case()
+        return Attachment.objects.filter(case=event).order_by("created_at")
 
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
@@ -2890,10 +2744,10 @@ class AttachmentListCreateForEventView(generics.ListCreateAPIView):
         return ctx
 
     def perform_create(self, serializer):
-        event = self.get_event()
+        event = self.get_case()
         _check_case_manage_access(self.request, event)
         f = self.request.FILES.get("file")
-        original_name = f.name if f else ""
+        original_name = PurePath(f.name).name if f else ""
 
         max_size = 25 * 1024 * 1024
 
@@ -2903,14 +2757,27 @@ class AttachmentListCreateForEventView(generics.ListCreateAPIView):
         if getattr(f, "size", 0) > max_size:
             raise ValidationError({"file": "File is too large."})
 
+        blocked_extensions = {".html", ".htm", ".svg", ".js", ".mjs", ".xhtml", ".xml"}
+        blocked_content_types = {
+            "text/html",
+            "image/svg+xml",
+            "application/javascript",
+            "text/javascript",
+            "application/xhtml+xml",
+        }
+        if PurePath(original_name).suffix.lower() in blocked_extensions:
+            raise ValidationError({"file": "This file type is not allowed."})
+        if (getattr(f, "content_type", "") or "").lower() in blocked_content_types:
+            raise ValidationError({"file": "This file type is not allowed."})
+
         inst = serializer.save(
-            event=event,
+            case=event,
             uploaded_by=self.request.user,
             original_name=original_name,
         )
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="attachment_added",
             text=f"Attachment added : {original_name}" if original_name else "Attachment added",
@@ -2942,8 +2809,8 @@ class AttachmentRetrieveDestroyView(generics.RetrieveDestroyAPIView):
             return qs
         customer_ids = get_accessible_customer_ids(user)
         return qs.filter(
-            Q(event__customer_id__in=customer_ids),
-            Q(event__owner=user) | Q(event__members=user),
+            Q(case__customer_id__in=customer_ids),
+            Q(case__owner=user) | Q(case__members=user),
         ).distinct()
 
     def get_serializer_context(self):
@@ -2952,7 +2819,7 @@ class AttachmentRetrieveDestroyView(generics.RetrieveDestroyAPIView):
         return ctx
 
     def perform_destroy(self, instance):
-        event = instance.event
+        event = instance.case
         _check_case_manage_access(self.request, event)
 
         original_name = instance.original_name
@@ -2961,7 +2828,7 @@ class AttachmentRetrieveDestroyView(generics.RetrieveDestroyAPIView):
         instance.delete()
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="attachment_deleted",
             text=f"Attachment deleted : {original_name}" if original_name else "Attachment deleted",
@@ -3033,14 +2900,15 @@ class SettingsSeverityRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAP
         )
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        object_id = str(instance.id)
+        object_repr = getattr(instance, "label", "") or ""
+        _hard_delete_or_validation_error(instance)
         audit_event(
             self.request,
-            action="settings.severity.disabled",
+            action="settings.severity.deleted",
             object_type="severity",
-            object_id=str(instance.id),
-            object_repr=getattr(instance, "label", "") or "",
+            object_id=object_id,
+            object_repr=object_repr,
             metadata={},
         )
 
@@ -3097,14 +2965,15 @@ class SettingsClassificationRetrieveUpdateDestroyView(generics.RetrieveUpdateDes
         )
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        object_id = str(instance.id)
+        object_repr = getattr(instance, "label", "") or ""
+        _hard_delete_or_validation_error(instance)
         audit_event(
             self.request,
-            action="settings.classification.disabled",
+            action="settings.classification.deleted",
             object_type="classification",
-            object_id=str(instance.id),
-            object_repr=getattr(instance, "label", "") or "",
+            object_id=object_id,
+            object_repr=object_repr,
             metadata={},
         )
 
@@ -3177,14 +3046,15 @@ class SettingsCustomerRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAP
         if is_default_customer(instance):
             raise ValidationError({"detail": "Default customer cannot be disabled or deleted."})
 
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        object_id = str(instance.id)
+        object_repr = getattr(instance, "name", "") or ""
+        _hard_delete_or_validation_error(instance)
         audit_event(
             self.request,
-            action="settings.customer.disabled",
+            action="settings.customer.deleted",
             object_type="customer",
-            object_id=str(instance.id),
-            object_repr=getattr(instance, "name", "") or "",
+            object_id=object_id,
+            object_repr=object_repr,
             metadata={},
         )
 
@@ -3259,15 +3129,17 @@ class SettingsCustomerContactRetrieveUpdateDestroyView(generics.RetrieveUpdateDe
         )
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        object_id = str(getattr(instance, "public_id", None) or instance.id)
+        object_repr = getattr(instance, "name", "") or ""
+        customer_id = str(getattr(instance, "customer_id", "") or "")
+        _hard_delete_or_validation_error(instance)
         audit_event(
             self.request,
-            action="settings.customer_contact.disabled",
+            action="settings.customer_contact.deleted",
             object_type="customer_contact",
-            object_id=str(getattr(instance, "public_id", None) or instance.id),
-            object_repr=getattr(instance, "name", "") or "",
-            metadata={"customer_id": str(getattr(instance, "customer_id", "") or "")},
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata={"customer_id": customer_id},
         )
 
 
@@ -3334,14 +3206,15 @@ class SettingsWorkbookTemplateRetrieveUpdateDestroyView(generics.RetrieveUpdateD
         )
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        object_id = str(instance.id)
+        object_repr = getattr(instance, "name", "") or ""
+        _hard_delete_or_validation_error(instance)
         audit_event(
             self.request,
-            action="settings.workbook_template.disabled",
+            action="settings.workbook_template.deleted",
             object_type="workbook_template",
-            object_id=str(instance.id),
-            object_repr=getattr(instance, "name", "") or "",
+            object_id=object_id,
+            object_repr=object_repr,
             metadata={},
         )
 
@@ -3433,17 +3306,17 @@ class CaseWorkbookGetView(APIView):
 
     def get(self, request, case_id):
         if request.user.is_staff:
-            event = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+            event = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             event = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 id=case_id,
             )
 
         _check_case_access(request, event)
 
-        inst = WorkbookInstance.objects.filter(event=event).first()
+        inst = WorkbookInstance.objects.filter(case=event).first()
         if not inst:
             return Response({"workbook": None}, status=status.HTTP_200_OK)
 
@@ -3461,17 +3334,17 @@ class CaseWorkbookApplyTemplateView(APIView):
         template_id = request.data.get("template_id")
 
         if request.user.is_staff:
-            event = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+            event = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             event = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 id=case_id,
             )
 
         _check_case_manage_access(request, event)
 
-        inst, _created = WorkbookInstance.objects.get_or_create(event=event)
+        inst, _created = WorkbookInstance.objects.get_or_create(case=event)
 
         if not template_id:
             inst.template = None
@@ -3479,7 +3352,7 @@ class CaseWorkbookApplyTemplateView(APIView):
             WorkbookInstanceItem.objects.filter(instance=inst).delete()
 
             TimelineItem.objects.create(
-                event=event,
+                case=event,
                 date=date.today(),
                 type="workbook_removed_from_case",
                 text="Workbook removed from case",
@@ -3511,7 +3384,7 @@ class CaseWorkbookApplyTemplateView(APIView):
         inst = WorkbookInstance.objects.select_related("template").prefetch_related("items").get(id=inst.id)
 
         TimelineItem.objects.create(
-            event=event,
+            case=event,
             date=date.today(),
             type="workbook_applied_on_case",
             text=f"Workbook applied on case",
@@ -3541,7 +3414,7 @@ class WorkbookInstanceItemUpdateView(generics.UpdateAPIView):
 
     def perform_update(self, serializer):
         item = self.get_object()
-        event = item.instance.event
+        event = item.instance.case
 
         _check_case_manage_access(self.request, event)
 
@@ -3550,7 +3423,7 @@ class WorkbookInstanceItemUpdateView(generics.UpdateAPIView):
 
         if old_done != updated.is_done:
             TimelineItem.objects.create(
-                event=event,
+                case=event,
                 date=date.today(),
                 type="workbook_instance_item_checked" if updated.is_done else "workbook_instance_item_unchecked",
                 text=f'Workbook: {"checked" if updated.is_done else "unchecked"} "{updated.label}"',
@@ -3636,15 +3509,17 @@ class SettingsReportTemplateRetrieveUpdateDestroyView(generics.RetrieveUpdateDes
         )
 
     def perform_destroy(self, instance):
-        instance.is_active = False
-        instance.save(update_fields=["is_active", "updated_at"])
+        object_id = str(instance.id)
+        object_repr = getattr(instance, "name", "") or ""
+        version = getattr(instance, "version", None)
+        _hard_delete_or_validation_error(instance)
         audit_event(
             self.request,
-            action="settings.report_template.disabled",
+            action="settings.report_template.deleted",
             object_type="report_template",
-            object_id=str(instance.id),
-            object_repr=getattr(instance, "name", "") or "",
-            metadata={"version": getattr(instance, "version", None)},
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata={"version": version},
         )
 
 
@@ -3660,14 +3535,14 @@ class SettingsReportTemplatePreviewView(APIView):
         html_tpl = ser.validated_data["html"]
         css = ser.validated_data.get("css", "") or ""
         params = ser.validated_data.get("params", {}) or {}
-        case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+        case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         _check_case_access(request, case)
 
-        wb = WorkbookInstance.objects.filter(event=case).prefetch_related("items").first()
+        wb = WorkbookInstance.objects.filter(case=case).prefetch_related("items").first()
         linked_alerts = Alert.objects.filter(case=case).order_by("-created_at")
-        comments = Comment.objects.filter(event=case).select_related("author").order_by("created_at")
-        attachments = Attachment.objects.filter(event=case).order_by("created_at")
-        timeline = TimelineItem.objects.filter(event=case).select_related("actor", "alert").order_by("date", "created_at")
+        comments = Comment.objects.filter(case=case).select_related("author").order_by("created_at")
+        attachments = Attachment.objects.filter(case=case).order_by("created_at")
+        timeline = TimelineItem.objects.filter(case=case).select_related("actor", "alert").order_by("date", "created_at")
         exchanges = CaseExchange.objects.filter(case=case).select_related("created_by").order_by("created_at")
         incident_timeline = IncidentTimelineItem.objects.filter(case=case).select_related("created_by").order_by("occurred_at", "created_at")
 
@@ -3726,16 +3601,16 @@ class CaseReportGenerateView(APIView):
         template_id = ser.validated_data["template_id"]
         params = ser.validated_data.get("params", {}) or {}
 
-        case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+        case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         _check_case_manage_access(request, case)
 
         tpl = get_object_or_404(ReportTemplate, id=template_id, is_active=True)
 
-        wb = WorkbookInstance.objects.filter(event=case).prefetch_related("items").first()
+        wb = WorkbookInstance.objects.filter(case=case).prefetch_related("items").first()
         linked_alerts = Alert.objects.filter(case=case).order_by("-created_at")
-        comments = Comment.objects.filter(event=case).select_related("author").order_by("created_at")
-        attachments = Attachment.objects.filter(event=case).order_by("created_at")
-        timeline = TimelineItem.objects.filter(event=case).select_related("actor", "alert").order_by("date", "created_at")
+        comments = Comment.objects.filter(case=case).select_related("author").order_by("created_at")
+        attachments = Attachment.objects.filter(case=case).order_by("created_at")
+        timeline = TimelineItem.objects.filter(case=case).select_related("actor", "alert").order_by("date", "created_at")
         exchanges = CaseExchange.objects.filter(case=case).select_related("created_by").order_by("created_at")
         incident_timeline = IncidentTimelineItem.objects.filter(case=case).select_related("created_by").order_by("occurred_at", "created_at")
 
@@ -3771,8 +3646,9 @@ class CaseReportGenerateView(APIView):
 
         from weasyprint import HTML, CSS
 
-        base_url = getattr(settings, "WEASYPRINT_BASEURL", None) or str(getattr(settings, "BASE_DIR", "."))
-        pdf_bytes = HTML(string=rendered_html, base_url=base_url).write_pdf(stylesheets=[CSS(string=tpl.css or "")])
+        pdf_bytes = HTML(string=rendered_html, url_fetcher=safe_report_url_fetcher).write_pdf(
+            stylesheets=[CSS(string=tpl.css or "", url_fetcher=safe_report_url_fetcher)]
+        )
 
         rep = ReportInstance.objects.create(
             case=case,
@@ -3787,7 +3663,7 @@ class CaseReportGenerateView(APIView):
         rep.pdf.save(f"{rep.id}.pdf", ContentFile(pdf_bytes), save=True)
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             date=date.today(),
             type="case_report_generated",
             text=f"Case report generated",
@@ -3815,7 +3691,7 @@ class CaseReportListView(generics.ListAPIView):
 
     def get_queryset(self):
         case_id = self.kwargs["case_id"]
-        case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+        case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         _check_case_access(self.request, case)
         return ReportInstance.objects.filter(case=case).order_by("-created_at")
 
@@ -3832,9 +3708,9 @@ class CaseIncidentTimelineListCreateView(generics.ListCreateAPIView):
         self.required_permission = "case.view" if request.method == "GET" else "case.update"
         super().initial(request, *args, **kwargs)
 
-    def get_case(self) -> Event:
+    def get_case(self) -> Case:
         case_id = self.kwargs["case_id"]
-        case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+        case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         _check_case_access(self.request, case)
         return case
 
@@ -3853,7 +3729,7 @@ class CaseIncidentTimelineListCreateView(generics.ListCreateAPIView):
         item = serializer.save(case=case, created_by=self.request.user)
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             date=date.today(),
             type="incident_timeline_item_added",
             text=f"Incident timeline: added '{item.title}'",
@@ -3886,12 +3762,12 @@ class IncidentTimelineItemRetrieveUpdateDestroyView(generics.RetrieveUpdateDestr
 
     def perform_update(self, serializer):
         item = serializer.instance
-        _check_case_manage_access(self.request, item.event)
+        _check_case_manage_access(self.request, item.case)
 
         obj = serializer.save()
 
         TimelineItem.objects.create(
-            event=obj.case,
+            case=obj.case,
             date=date.today(),
             type="incident_timeline_item_updated",
             text=f"Incident timeline: updated '{obj.title}'",
@@ -3916,7 +3792,7 @@ class IncidentTimelineItemRetrieveUpdateDestroyView(generics.RetrieveUpdateDestr
         instance.delete()
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             date=date.today(),
             type="incident_timeline_item_deleted",
             text=f"Incident timeline: deleted '{title}'",
@@ -4006,6 +3882,13 @@ class UpdateAvatarView(APIView):
         if (getattr(file, "content_type", "") or "").lower() not in allowed_content_types:
             return Response({"detail": "Unsupported avatar file type."}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            image = Image.open(file)
+            image.verify()
+            file.seek(0)
+        except (UnidentifiedImageError, OSError, ValueError):
+            return Response({"detail": "Invalid image file."}, status=status.HTTP_400_BAD_REQUEST)
+
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         profile.avatar = file
         profile.save()
@@ -4046,7 +3929,7 @@ def _get_instance_secret(instance: ConnectorInstance) -> str:
     return ""
 
 
-def dispatch_case_exchange_webhooks(case: Event, exchange: CaseExchange, actor_user):
+def dispatch_case_exchange_webhooks(case: Case, exchange: CaseExchange, actor_user):
     endpoints = (
         ConnectorEndpoint.objects
         .select_related("instance")
@@ -4188,14 +4071,14 @@ def dispatch_case_exchange_webhooks(case: Event, exchange: CaseExchange, actor_u
         )
 
 
-def _case_subject_prefix(case: Event) -> str:
+def _case_subject_prefix(case: Case) -> str:
     number = getattr(case, "case_number", None)
     if number:
         return f"[Case ID#{number}]"
     return f"[Case ID#{case.id}]"
 
 
-def _ensure_case_subject_prefix(subject: str, case: Event) -> str:
+def _ensure_case_subject_prefix(subject: str, case: Case) -> str:
     subject = (subject or "").strip()
     prefix = _case_subject_prefix(case)
 
@@ -4209,7 +4092,7 @@ def _ensure_case_subject_prefix(subject: str, case: Event) -> str:
 
 
 
-def dispatch_case_exchange_send(case: Event, exchange: CaseExchange, actor_user):
+def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
     settings_obj = CaseRetentionSettings.get_solo()
     template = getattr(settings_obj, "exchange_send_template", None)
 
@@ -4317,13 +4200,13 @@ class CaseExchangeListCreateForCaseView(APIView):
         self.required_permission = "case.view" if request.method == "GET" else "case.update"
         super().initial(request, *args, **kwargs)
 
-    def _get_case(self, request, case_id: str) -> Event:
+    def _get_case(self, request, case_id: str) -> Case:
         if request.user.is_staff:
-            case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+            case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
             case = get_object_or_404(
-                Event.objects.filter(is_deleted=False, customer_id__in=customer_ids),
+                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
                 id=case_id,
             )
         _check_case_access(request, case)
@@ -4352,7 +4235,7 @@ class CaseExchangeListCreateForCaseView(APIView):
             )
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             date=date.today(),
             type="case_exchange_created",
             text=f"Exchange created: {(ex.subject or '(no subject)')}",
@@ -4401,10 +4284,10 @@ class CaseExchangeSendView(APIView):
 
     def post(self, request, case_id: str):
         if request.user.is_staff:
-            case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+            case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
-            case = get_object_or_404(Event.objects.filter(is_deleted=False, customer_id__in=customer_ids), id=case_id)
+            case = get_object_or_404(Case.objects.filter(is_deleted=False, customer_id__in=customer_ids), id=case_id)
 
         _check_case_manage_access(request, case)
 
@@ -4429,7 +4312,7 @@ class CaseExchangeSendView(APIView):
             )
 
             TimelineItem.objects.create(
-                event=case,
+                case=case,
                 date=date.today(),
                 type="case_exchange_created",
                 text=f"Exchange sent: {(ex.subject or '(no subject)')}",
@@ -4499,10 +4382,10 @@ class CaseExchangeFollowupBulkView(APIView):
 
     def post(self, request, case_id: str):
         if request.user.is_staff:
-            case = get_object_or_404(Event.objects.filter(is_deleted=False), id=case_id)
+            case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
         else:
             customer_ids = get_accessible_customer_ids(request.user)
-            case = get_object_or_404(Event.objects.filter(is_deleted=False, customer_id__in=customer_ids), id=case_id)
+            case = get_object_or_404(Case.objects.filter(is_deleted=False, customer_id__in=customer_ids), id=case_id)
 
         _check_case_manage_access(request, case)
 
@@ -4595,7 +4478,7 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
         }
 
         TimelineItem.objects.create(
-            event=updated.case,
+            case=updated.case,
             date=date.today(),
             type="case_exchange_updated",
             text=f"Exchange updated: {(updated.subject or '(no subject)')}",
@@ -4629,7 +4512,7 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
         instance.delete()
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             date=date.today(),
             type="case_exchange_deleted",
             text=f"Exchange deleted: {(subj or '(no subject)')}",
@@ -4687,16 +4570,16 @@ class CaseExchangeReplyQuickpartViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         obj = self.get_object()
-        if obj.is_active:
-            obj.is_active = False
-            obj.save(update_fields=["is_active", "updated_at"])
+        object_id = str(obj.id)
+        object_repr = getattr(obj, "name", "") or ""
+        _hard_delete_or_validation_error(obj)
 
         audit_event(
             request,
-            action="settings.quickpart.disabled",
+            action="settings.quickpart.deleted",
             object_type="case_exchange_reply_quickpart",
-            object_id=str(obj.id),
-            object_repr=getattr(obj, "name", "") or "",
+            object_id=object_id,
+            object_repr=object_repr,
             metadata={},
         )
 
@@ -4729,7 +4612,7 @@ class HuntListCreateView(generics.ListCreateAPIView):
         qs = Hunt.objects.filter(is_deleted=False).select_related("owner", "customer").prefetch_related("reviewers")
 
         if not self.request.user.is_staff:
-            customer_ids = get_accessible_customer_ids(self.request.user)
+            customer_ids = get_permitted_customer_ids(self.request.user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
 
         customer_ids_filter = self.request.query_params.getlist("customer")
@@ -4785,8 +4668,7 @@ class HuntListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         if not self.request.user.is_staff:
             customer = serializer.validated_data.get("customer")
-            allowed = set(str(x) for x in get_accessible_customer_ids(self.request.user))
-            if customer and str(customer.id) not in allowed:
+            if customer and not user_has_perm(self.request.user, "hunt.create", customer_id=customer.id):
                 raise PermissionDenied("Customer not accessible.")
 
         obj = serializer.save(created_by=self.request.user if self.request.user.is_authenticated else None)
@@ -4814,7 +4696,7 @@ class HuntListCreateView(generics.ListCreateAPIView):
         )
 
 
-class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
+class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     queryset = Hunt.objects.filter(is_deleted=False).select_related("owner", "customer").prefetch_related("reviewers", "journal_entries", "case_links__case")
     serializer_class = HuntDetailSerializer
@@ -4829,7 +4711,7 @@ class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
         return _filter_hunts_for_user(qs, self.request.user)
 
     def get_permissions(self):
-        if self.request.method in {"PATCH", "PUT"}:
+        if self.request.method in {"PATCH", "PUT", "DELETE"}:
             self.required_permission = "hunt.manage"
         else:
             self.required_permission = "hunt.view"
@@ -4854,8 +4736,7 @@ class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
 
         if not self.request.user.is_staff and "customer" in serializer.validated_data:
             customer = serializer.validated_data.get("customer")
-            allowed = set(str(x) for x in get_accessible_customer_ids(self.request.user))
-            if customer and str(customer.id) not in allowed:
+            if customer and not user_has_perm(self.request.user, "hunt.manage", customer_id=customer.id):
                 raise PermissionDenied("Customer not accessible.")
             
         obj = serializer.save()
@@ -4900,6 +4781,20 @@ class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateAPIView):
             },
         )
 
+    def perform_destroy(self, instance):
+        object_id = str(instance.id)
+        object_repr = instance.title
+        metadata = _audit_hunt_meta(instance, {"hard": True})
+        instance.delete()
+        audit_event(
+            self.request,
+            action="hunt.delete",
+            object_type="hunt",
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata=metadata,
+        )
+
 
 class HuntDeleteView(APIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
@@ -4907,24 +4802,18 @@ class HuntDeleteView(APIView):
 
     def post(self, request, pk):
         hunt = _get_hunt_for_user_or_404(request, id=pk)
-
-        hunt.is_deleted = True
-        hunt.deleted_at = timezone.now()
-        hunt.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+        object_id = str(hunt.id)
+        object_repr = hunt.title
+        metadata = _audit_hunt_meta(hunt, {"hard": True})
+        hunt.delete()
 
         audit_event(
             request,
             action="hunt.delete",
             object_type="hunt",
-            object_id=str(hunt.id),
-            object_repr=hunt.title,
-            metadata=_audit_hunt_meta(
-                hunt,
-                {
-                    "soft": True,
-                    "deleted_at": hunt.deleted_at.isoformat() if hunt.deleted_at else None,
-                },
-            ),
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata=metadata,
         )
         return Response(status=204)
 
@@ -5246,24 +5135,42 @@ class HuntUnarchiveView(APIView):
         return Response(status=204)
 
 
-def _user_has_permission(user, code: str) -> bool:
+def _user_has_permission(user, code: str, customer_id=None) -> bool:
     if not user or not getattr(user, "is_authenticated", False):
         return False
-    if getattr(user, "is_staff", False):
-        return True
-    return code in get_user_permissions(user)
+    return user_has_perm(user, code, customer_id=customer_id)
 
 
-def _user_can_manage_tasks(user) -> bool:
-    return _user_has_permission(user, "task.manage")
+def _user_can_manage_tasks(user, customer_id=None) -> bool:
+    return _user_has_permission(user, "task.manage", customer_id=customer_id)
 
 
-def _user_can_add_tasks(user) -> bool:
-    return _user_has_permission(user, "task.add") or _user_can_manage_tasks(user)
+def _user_can_add_tasks(user, customer_id=None) -> bool:
+    return _user_has_permission(user, "task.add", customer_id=customer_id) or _user_can_manage_tasks(user, customer_id)
 
 
-def _user_can_view_tasks(user) -> bool:
-    return _user_has_permission(user, "task.view") or _user_can_manage_tasks(user)
+def _user_can_view_tasks(user, customer_id=None) -> bool:
+    return _user_has_permission(user, "task.view", customer_id=customer_id) or _user_can_manage_tasks(user, customer_id)
+
+
+def _task_permission_customer_ids(user, code: str) -> set[str]:
+    return {
+        str(customer_id)
+        for customer_id in get_accessible_customer_ids(user)
+        if _user_has_permission(user, code, customer_id=customer_id)
+    }
+
+
+def _limit_tasks_to_permission(qs, user, code: str, *, allow_owner=False):
+    if is_doko_admin(user) or _user_has_permission(user, code):
+        return qs
+
+    permitted = _task_permission_customer_ids(user, code)
+    inaccessible = Customer.objects.exclude(id__in=permitted)
+    scoped = Q(customers__id__in=permitted) & ~Q(customers__in=inaccessible)
+    if allow_owner:
+        scoped |= Q(owner=user, customers__isnull=True)
+    return qs.filter(scoped).distinct()
 
 
 class TaskListCreateView(generics.ListCreateAPIView):
@@ -5292,8 +5199,10 @@ class TaskListCreateView(generics.ListCreateAPIView):
             .annotate(linked_case_count=Count("case_links", distinct=True))
         )
 
-        if not can_manage or scope != "all":
-            qs = qs.filter(owner=user)
+        if scope == "all":
+            qs = _limit_tasks_to_permission(qs, user, "task.manage")
+        else:
+            qs = _limit_tasks_to_permission(qs.filter(owner=user), user, "task.view", allow_owner=True)
 
         search = (self.request.query_params.get("search") or "").strip()
         if search:
@@ -5342,20 +5251,24 @@ class TaskListCreateView(generics.ListCreateAPIView):
 
         requested_owner = serializer.validated_data.get("owner")
 
-        if requested_owner and not can_manage and requested_owner != user:
+        requested_customers = serializer.validated_data.get("customers", [])
+        requested_customer_ids = {str(getattr(x, "id", x)) for x in requested_customers}
+        can_manage_requested = bool(requested_customer_ids) and all(
+            _user_can_manage_tasks(user, customer_id) for customer_id in requested_customer_ids
+        )
+
+        if requested_owner and not (can_manage or can_manage_requested) and requested_owner != user:
             raise PermissionDenied("Only task managers can assign another owner.")
 
-        if not can_manage:
-            allowed = set(str(x) for x in get_accessible_customer_ids(user))
-            requested_customers = serializer.validated_data.get("customers", [])
-            requested_customer_ids = set(str(getattr(x, "id", x)) for x in requested_customers)
-
-            if requested_customer_ids and not requested_customer_ids.issubset(allowed):
-                raise PermissionDenied("Customer not accessible.")
+        if requested_customer_ids:
+            if not all(_user_can_add_tasks(user, customer_id) for customer_id in requested_customer_ids):
+                raise PermissionDenied("Task creation is not allowed for one or more customers.")
+        elif not _user_can_add_tasks(user):
+            raise PermissionDenied("A customer is required for a customer-scoped task.")
 
         task = serializer.save(created_by=user)
 
-        if can_manage:
+        if can_manage or can_manage_requested:
             if requested_owner and task.owner_id != requested_owner.id:
                 task.owner = requested_owner
                 task.save(update_fields=["owner", "updated_at"])
@@ -5387,7 +5300,9 @@ class TaskRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
 
     def initial(self, request, *args, **kwargs):
-        if request.method in ("DELETE", "PATCH", "PUT"):
+        if request.method == "DELETE":
+            self.required_permission = "task.manage"
+        elif request.method in ("PATCH", "PUT"):
             self.required_permission = "task.manage" if _user_can_manage_tasks(request.user) else "task.add"
         else:
             self.required_permission = "task.manage" if _user_can_manage_tasks(request.user) else "task.view"
@@ -5402,10 +5317,19 @@ class TaskRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             .annotate(linked_case_count=Count("case_links", distinct=True))
         )
 
-        if _user_can_manage_tasks(self.request.user):
-            return qs
+        if self.request.method == "DELETE":
+            return _limit_tasks_to_permission(qs, self.request.user, "task.manage")
 
-        return qs.filter(owner=self.request.user).distinct()
+        if self.request.method in ("PATCH", "PUT"):
+            managed = _limit_tasks_to_permission(qs, self.request.user, "task.manage")
+            owned = _limit_tasks_to_permission(
+                qs.filter(owner=self.request.user),
+                self.request.user,
+                "task.add",
+            )
+            return qs.filter(Q(pk__in=managed.values("pk")) | Q(pk__in=owned.values("pk"))).distinct()
+
+        return _limit_tasks_to_permission(qs, self.request.user, "task.view", allow_owner=True)
 
     def get_serializer_class(self):
         return TaskDetailSerializer
@@ -5422,19 +5346,26 @@ class TaskRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             "customer_ids": [str(x) for x in inst.customers.values_list("id", flat=True)],
         }
 
-        if not _user_can_manage_tasks(self.request.user):
+        customer_ids = [str(x) for x in inst.customers.values_list("id", flat=True)]
+        can_manage_task = bool(customer_ids) and all(
+            _user_can_manage_tasks(self.request.user, customer_id) for customer_id in customer_ids
+        )
+
+        if not (_user_can_manage_tasks(self.request.user) or can_manage_task):
             requested_owner = serializer.validated_data.get("owner")
             if requested_owner and requested_owner != self.request.user:
                 raise PermissionDenied("Only task managers can assign another owner.")
 
             if "customers" in serializer.validated_data:
-                allowed = set(str(x) for x in get_accessible_customer_ids(self.request.user))
                 requested_customer_ids = {
                     str(getattr(x, "id", x))
                     for x in serializer.validated_data.get("customers", [])
                 }
 
-                if requested_customer_ids and not requested_customer_ids.issubset(allowed):
+                if requested_customer_ids and not all(
+                    _user_can_add_tasks(self.request.user, customer_id)
+                    for customer_id in requested_customer_ids
+                ):
                     raise PermissionDenied("Customer not accessible.")
         
         obj = serializer.save()
@@ -5469,23 +5400,18 @@ class TaskRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
         )
 
     def perform_destroy(self, instance):
-        instance.is_deleted = True
-        instance.deleted_at = timezone.now()
-        instance.save(update_fields=["is_deleted", "deleted_at", "updated_at"])
+        object_id = str(instance.id)
+        object_repr = instance.title or ""
+        metadata = _audit_task_meta(instance, {"hard": True})
+        instance.delete()
 
         audit_event(
             self.request,
             action="task.deleted",
             object_type="task",
-            object_id=str(instance.id),
-            object_repr=instance.title or "",
-            metadata=_audit_task_meta(
-                instance,
-                {
-                    "soft": True,
-                    "deleted_at": instance.deleted_at.isoformat() if instance.deleted_at else None,
-                },
-            ),
+            object_id=object_id,
+            object_repr=object_repr,
+            metadata=metadata,
         )
 
 
@@ -5725,11 +5651,11 @@ class TaskCaseLinkRetrieveDestroyView(generics.RetrieveDestroyAPIView):
         )
 
 
-class TaskListForEventView(generics.ListAPIView):
+class TaskListForCaseView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "case.view"
     serializer_class = TaskListSerializer
-    event_id_kwarg = "event_id"
+    case_id_kwarg = "case_id"
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
@@ -5737,20 +5663,20 @@ class TaskListForEventView(generics.ListAPIView):
         if not _user_can_view_tasks(request.user):
             raise PermissionDenied("Task not accessible.")
 
-    def get_event(self):
-        event_id = self.kwargs["event_id"]
-        qs = Event.objects.filter(is_deleted=False)
+    def get_case(self):
+        case_id = self.kwargs["case_id"]
+        qs = Case.objects.filter(is_deleted=False)
 
         if not self.request.user.is_staff:
             customer_ids = get_accessible_customer_ids(self.request.user)
             qs = qs.filter(customer_id__in=customer_ids)
 
-        event = get_object_or_404(qs, id=event_id)
+        event = get_object_or_404(qs, id=case_id)
         _check_case_access(self.request, event)
         return event
 
     def get_queryset(self):
-        event = self.get_event()
+        event = self.get_case()
         user = self.request.user
 
         qs = (

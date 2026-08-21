@@ -179,15 +179,11 @@ export async function updateHunt(id: string, payload: Partial<HuntDetail>) {
 
 export async function deleteHunt(id: string): Promise<void> {
   const csrfToken = await ensureCsrf();
-  await api.post(
-    `/api/hunts/${id}/delete/`,
-    {},
-    {
-      headers: {
-        "X-CSRFToken": csrfToken,
-      },
-    }
-  );
+  await api.delete(`/api/hunts/${id}/`, {
+    headers: {
+      "X-CSRFToken": csrfToken,
+    },
+  });
 }
 
 export async function listHuntJournal(huntId: string): Promise<HuntJournalEntry[]> {

@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from .html_sanitizer import sanitize_html
-from .rbac import get_accessible_customer_ids
+from .rbac import get_accessible_customer_ids, user_has_perm
 
 import json
 import uuid
@@ -11,7 +11,7 @@ from rest_framework import serializers
 
 from .models import (
     Alert, 
-    Event, 
+    Case,
     TimelineItem, 
     Comment, 
     Attachment, 
@@ -52,6 +52,18 @@ SLA_UNITS = {"minute", "hour", "day", "week", "month"}
 ALERT_RAW_MAX_BYTES = 1024 * 1024
 ALERT_CASE_EXCHANGES_MAX_ITEMS = 20
 ALERT_CASE_EXCHANGE_BODY_MAX_CHARS = 500000
+
+
+def _authorized_default_customer(context, permission_code: str):
+    customer = Customer.objects.filter(id=DEFAULT_CUSTOMER_ID, is_active=True).first()
+    if customer is None:
+        raise serializers.ValidationError({"customer": "A customer is required."})
+
+    request = context.get("request") if context else None
+    user = getattr(request, "user", None)
+    if not user_has_perm(user, permission_code, customer_id=customer.id):
+        raise serializers.ValidationError({"customer": "The default customer is not accessible."})
+    return customer
 
 def compute_sla_info(obj, completed_statuses: set[str]):
     customer = getattr(obj, "customer", None)
@@ -147,13 +159,14 @@ class AuditLogSerializer(serializers.ModelSerializer):
 
 
 class MeSerializer(serializers.ModelSerializer):
+    is_admin = serializers.BooleanField(source="is_staff", read_only=True)
     timezone = serializers.CharField(source="profile.timezone", required=False, allow_blank=True)
     avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "is_staff", "timezone", "avatar_url"]
-        read_only_fields = ["id", "username", "is_staff", "avatar_url"]
+        fields = ["id", "username", "email", "is_admin", "timezone", "avatar_url"]
+        read_only_fields = ["id", "username", "is_admin", "avatar_url"]
 
     def get_avatar_url(self, obj):
         request = self.context.get("request")
@@ -185,7 +198,7 @@ class TimelineItemSerializer(serializers.ModelSerializer):
     alert_id = serializers.UUIDField(source="alert.id", read_only=True, allow_null=True)
     class Meta:
         model = TimelineItem
-        fields = ["id", "event", "date", "type", "text", "actor", "actor_username", "created_at", "updated_at", "alert_id"]
+        fields = ["id", "case", "date", "type", "text", "actor", "actor_username", "created_at", "updated_at", "alert_id"]
         read_only_fields = ["id", "created_at", "updated_at", "date"]
 
 
@@ -312,10 +325,7 @@ class AlertSerializer(serializers.ModelSerializer):
     
     def create(self, validated_data):
         if not validated_data.get("customer"):
-            try:
-                validated_data["customer"] = Customer.objects.get(id=DEFAULT_CUSTOMER_ID)
-            except Customer.DoesNotExist:
-                pass
+            validated_data["customer"] = _authorized_default_customer(self.context, "alert.add")
 
         return super().create(validated_data)
 
@@ -368,7 +378,7 @@ class AlertCommentSerializer(serializers.ModelSerializer):
         return sanitize_html(value)
 
 
-class EventListSerializer(serializers.ModelSerializer):
+class CaseListSerializer(serializers.ModelSerializer):
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False
     )
@@ -394,7 +404,7 @@ class EventListSerializer(serializers.ModelSerializer):
 
 
     class Meta:
-        model = Event
+        model = Case
         fields = [
             "id",
             "case_number",
@@ -437,7 +447,7 @@ class EventListSerializer(serializers.ModelSerializer):
         ]
 
 
-class EventSerializer(serializers.ModelSerializer):
+class CaseSerializer(serializers.ModelSerializer):
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False
     )
@@ -448,7 +458,7 @@ class EventSerializer(serializers.ModelSerializer):
     workbook_template_id = serializers.UUIDField(write_only=True, required=False, allow_null=True)
 
     class Meta:
-        model = Event
+        model = Case
         fields = [
             "id", 
             "case_number", 
@@ -529,16 +539,13 @@ class EventSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         if not validated_data.get("customer"):
-            try:
-                validated_data["customer"] = Customer.objects.get(id=DEFAULT_CUSTOMER_ID)
-            except Customer.DoesNotExist:
-                pass
+            validated_data["customer"] = _authorized_default_customer(self.context, "case.add")
 
         return super().create(validated_data)
 
 
 
-class EventDetailSerializer(serializers.ModelSerializer):
+class CaseDetailSerializer(serializers.ModelSerializer):
     timeline_items = TimelineItemSerializer(many=True, read_only=True)
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False
@@ -559,7 +566,7 @@ class EventDetailSerializer(serializers.ModelSerializer):
     case_sources = serializers.SerializerMethodField()
 
     class Meta:
-        model = Event
+        model = Case
         fields = [
             "id",
             "title", 
@@ -606,7 +613,7 @@ class HuntCaseLiteSerializer(serializers.ModelSerializer):
     case_number = serializers.IntegerField(read_only=True)
 
     class Meta:
-        model = Event
+        model = Case
         fields = ["id", "case_number", "title", "status", "created_at", "updated_at"]
 
 
@@ -631,8 +638,8 @@ class HuntCaseLinkSerializer(serializers.ModelSerializer):
 
     def validate_case_id(self, value):
         try:
-            case = Event.objects.get(id=value, is_deleted=False)
-        except Event.DoesNotExist:
+            case = Case.objects.get(id=value, is_deleted=False)
+        except Case.DoesNotExist:
             raise serializers.ValidationError("Unknown case")
 
         hunt = self.context.get("hunt")
@@ -733,10 +740,7 @@ class HuntListSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
 
         if not validated_data.get("customer"):
-            try:
-                validated_data["customer"] = Customer.objects.get(id=DEFAULT_CUSTOMER_ID)
-            except Customer.DoesNotExist:
-                pass
+            validated_data["customer"] = _authorized_default_customer(self.context, "hunt.create")
 
         if "created_by" not in validated_data and getattr(user, "is_authenticated", False):
             validated_data["created_by"] = user
@@ -811,10 +815,7 @@ class HuntDetailSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
 
         if not validated_data.get("customer"):
-            try:
-                validated_data["customer"] = Customer.objects.get(id=DEFAULT_CUSTOMER_ID)
-            except Customer.DoesNotExist:
-                pass
+            validated_data["customer"] = _authorized_default_customer(self.context, "hunt.create")
 
         if "created_by" not in validated_data and getattr(user, "is_authenticated", False):
             validated_data["created_by"] = user
@@ -833,14 +834,14 @@ class HuntDetailSerializer(serializers.ModelSerializer):
 
 
 class CommentSerializer(serializers.ModelSerializer):
-    customer_id = serializers.UUIDField(source="event.customer.id", read_only=True)
-    customer_name = serializers.CharField(source="event.customer.name", read_only=True)
+    customer_id = serializers.UUIDField(source="case.customer.id", read_only=True)
+    customer_name = serializers.CharField(source="case.customer.name", read_only=True)
     author_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Comment
-        fields = ["id", "event", "author", "text", "created_at", "updated_at", "customer_id", "customer_name", "author_display"]
-        read_only_fields = ["id", "event", "author", "created_at", "updated_at"]
+        fields = ["id", "case", "author", "text", "created_at", "updated_at", "customer_id", "customer_name", "author_display"]
+        read_only_fields = ["id", "case", "author", "created_at", "updated_at"]
 
     def get_author_display(self, obj):
         if obj.author:
@@ -858,14 +859,14 @@ class CommentSerializer(serializers.ModelSerializer):
 class AttachmentSerializer(serializers.ModelSerializer):
     uploaded_by_username = serializers.CharField(source="uploaded_by.username", read_only=True)
     file_url = serializers.SerializerMethodField()
-    customer_id = serializers.UUIDField(source="event.customer.id", read_only=True)
-    customer_name = serializers.CharField(source="event.customer.name", read_only=True)
+    customer_id = serializers.UUIDField(source="case.customer.id", read_only=True)
+    customer_name = serializers.CharField(source="case.customer.name", read_only=True)
 
     class Meta:
         model = Attachment
         fields = [
             "id",
-            "event",
+            "case",
             "uploaded_by",
             "uploaded_by_username",
             "original_name",
@@ -875,7 +876,7 @@ class AttachmentSerializer(serializers.ModelSerializer):
             "customer_name", 
             "customer_id",
         ]
-        read_only_fields = ["id", "event", "uploaded_by", "uploaded_by_username", "file_url", "created_at"]
+        read_only_fields = ["id", "case", "uploaded_by", "uploaded_by_username", "file_url", "created_at"]
 
     def get_file_url(self, obj):
         request = self.context.get("request")
@@ -1010,8 +1011,8 @@ class WorkbookInstanceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = WorkbookInstance
-        fields = ["id", "event", "template", "created_at", "items"]
-        read_only_fields = ["id", "event", "created_at", "items"]
+        fields = ["id", "case", "template", "created_at", "items"]
+        read_only_fields = ["id", "case", "created_at", "items"]
 
 
 class ReportTemplateSerializer(serializers.ModelSerializer):
@@ -1098,7 +1099,7 @@ class ConnectorResultSerializer(serializers.ModelSerializer):
             "endpoint_id",
             "action_id",
             "target_type", "target_key", "target_value",
-            "request_payload", "response_payload",
+            "response_payload",
             "status", "error",
             "created_by", "created_at",
         ]
@@ -1132,6 +1133,7 @@ class ConnectorEndpointSerializer(serializers.ModelSerializer):
             "method",
             "base_url",
             "path_template",
+            "body_template",
             "timeout_ms",
             "is_enabled",
             "created_at",
@@ -1309,7 +1311,7 @@ class TaskCaseLiteSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source="customer.name", read_only=True)
 
     class Meta:
-        model = Event
+        model = Case
         fields = ["id", "case_number", "title", "status", "customer_name", "created_at", "updated_at"]
 
 
@@ -1335,7 +1337,7 @@ class TaskCaseLinkSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         user = getattr(request, "user", None)
 
-        qs = Event.objects.filter(id=value, is_deleted=False)
+        qs = Case.objects.filter(id=value, is_deleted=False)
 
         if user and getattr(user, "is_authenticated", False) and not getattr(user, "is_staff", False):
             customer_ids = get_accessible_customer_ids(user)

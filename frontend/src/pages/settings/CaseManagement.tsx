@@ -116,7 +116,7 @@ export default function SettingsCaseManagement() {
   const { push } = useToast();
   const navigate = useNavigate();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
 
   const canManageCaseSettings = can("settings.case_management.manage");
   const canViewQuickparts = can("case.view");

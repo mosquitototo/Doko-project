@@ -82,7 +82,7 @@ export default function HuntsPage() {
   const navigate = useNavigate();
   const { push } = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView = can("hunt.view");
   const canCreate = can("hunt.create");
 

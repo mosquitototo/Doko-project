@@ -16,7 +16,7 @@ from .rbac import user_has_perm, get_accessible_customer_ids
 from .models import (
     ActionRun,
     ConnectorResult,
-    Event,
+    Case,
     ConnectorInstance,
     ConnectorEndpoint,
     ConnectorAllowlistDomain,
@@ -31,6 +31,12 @@ from .serializers import (
 from .connector_hub_client import run_hub_request, validate_external_base_url
 from .crypto_secrets import encrypt_secret, decrypt_secret
 from .outbound_proxy import build_outbound_proxy_url
+
+
+def _parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 
@@ -149,7 +155,7 @@ def _safe_json_from_response(resp) -> dict:
 
 
 def _get_case_for_connector_run(user, case_id: str):
-    qs = Event.objects.filter(is_deleted=False)
+    qs = Case.objects.filter(is_deleted=False)
 
     if user.is_staff:
         return qs.filter(id=case_id).first()
@@ -165,7 +171,7 @@ def _get_case_for_connector_run(user, case_id: str):
 
 
 def _get_case_for_connector_read(user, case_id: str):
-    qs = Event.objects.filter(is_deleted=False)
+    qs = Case.objects.filter(is_deleted=False)
 
     if user.is_staff:
         return qs.filter(id=case_id).first()
@@ -250,6 +256,40 @@ def _render_template(s: str, *, secret: str, case_id: str, target_key: str, targ
     return out
 
 
+def _render_payload_template(value, *, secret: str, case_id: str, target_key: str, target_value: str):
+    if isinstance(value, dict):
+        return {
+            str(key): _render_payload_template(
+                item,
+                secret=secret,
+                case_id=case_id,
+                target_key=target_key,
+                target_value=target_value,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _render_payload_template(
+                item,
+                secret=secret,
+                case_id=case_id,
+                target_key=target_key,
+                target_value=target_value,
+            )
+            for item in value
+        ]
+    if isinstance(value, str):
+        return _render_template(
+            value,
+            secret=secret,
+            case_id=case_id,
+            target_key=target_key,
+            target_value=target_value,
+        )
+    return value
+
+
 def _normalize_case_targets(case, target_type: str, targets) -> list[dict[str, str]]:
     if target_type == "case":
         return [{"key": "case", "value": str(case.id)}]
@@ -309,7 +349,7 @@ def _merge_default_accept(headers: dict) -> dict:
     return headers
 
 
-def _redact_headers(headers: dict) -> dict:
+def _redact_headers(headers: dict, secret: str = "") -> dict:
     out = dict(headers or {})
     for k in list(out.keys()):
         lk = str(k).lower()
@@ -326,6 +366,8 @@ def _redact_headers(headers: dict) -> dict:
             "set-cookie",
         ):
             out[k] = "***"
+        elif secret:
+            out[k] = str(out[k]).replace(secret, "[redacted]")
     return out
 
 
@@ -446,7 +488,7 @@ def connector_instances(request):
         name=name,
         description=str(request.data.get("description") or ""),
         connector_type=str(request.data.get("connector_type") or "http"),
-        is_enabled=bool(request.data.get("is_enabled", True)),
+        is_enabled=_parse_bool(request.data.get("is_enabled", True)),
         config=request.data.get("config") or {},
         created_by=request.user,
     )
@@ -486,7 +528,7 @@ def connector_instance_detail(request, instance_id: str):
     if "config" in request.data:
         inst.config = request.data.get("config") or {}
     if "is_enabled" in request.data:
-        inst.is_enabled = bool(request.data.get("is_enabled"))
+        inst.is_enabled = _parse_bool(request.data.get("is_enabled"))
 
     if "secret" in request.data:
         s = str(request.data.get("secret") or "").strip()
@@ -514,7 +556,7 @@ def connector_instance_add_endpoint(request, instance_id: str):
     path_template = str(request.data.get("path_template") or "").strip()
 
     if target_type not in {"case", "ioc", "asset"}:
-        target_type = "case"
+        return Response({"detail": "Invalid target_type"}, status=400)
 
     if not name or not base_url or not path_template:
         return Response({"detail": "Missing fields (name, base_url, path_template)"}, status=400)
@@ -545,8 +587,9 @@ def connector_instance_add_endpoint(request, instance_id: str):
         base_url=base_url,
         path_template=path_template,
         headers_text=_dump_headers_text(headers),
+        body_template=request.data.get("body_template"),
         timeout_ms=timeout_ms,
-        is_enabled=bool(request.data.get("is_enabled", True)),
+        is_enabled=_parse_bool(request.data.get("is_enabled", True)),
     )
 
     return Response(ConnectorEndpointSerializer(ep).data, status=201)
@@ -575,7 +618,10 @@ def connector_endpoint_detail(request, endpoint_id: str):
     if "label" in request.data:
         ep.label = str(request.data.get("label") or "")
     if "target_type" in request.data:
-        ep.target_type = str(request.data.get("target_type") or "").strip()
+        target_type = str(request.data.get("target_type") or "").strip()
+        if target_type not in {"case", "ioc", "asset"}:
+            return Response({"detail": "Invalid target_type"}, status=400)
+        ep.target_type = target_type
     if "method" in request.data:
         try:
             ep.method = _normalize_connector_method(request.data.get("method"))
@@ -589,6 +635,12 @@ def connector_endpoint_detail(request, endpoint_id: str):
             return Response({"detail": str(e)}, status=400)
         ep.headers_text = _dump_headers_text(headers)
 
+    if "body_template" in request.data:
+        body_template = request.data.get("body_template")
+        if body_template is not None and not isinstance(body_template, (dict, list, str)):
+            return Response({"detail": "body_template must be JSON-compatible"}, status=400)
+        ep.body_template = body_template
+
     if "timeout_ms" in request.data:
         try:
             ep.timeout_ms = _normalize_connector_timeout_ms(request.data.get("timeout_ms"))
@@ -596,7 +648,7 @@ def connector_endpoint_detail(request, endpoint_id: str):
             return Response({"detail": str(e)}, status=400)
         
     if "is_enabled" in request.data:
-        ep.is_enabled = bool(request.data.get("is_enabled"))
+        ep.is_enabled = _parse_bool(request.data.get("is_enabled"))
 
     if "base_url" in request.data:
         base_url = _normalize_base_url(str(request.data.get("base_url") or "").strip())
@@ -635,7 +687,7 @@ def connector_allowlist(request):
 
     obj, _ = ConnectorAllowlistDomain.objects.update_or_create(
         domain=domain,
-        defaults={"is_enabled": bool(request.data.get("is_enabled", True))},
+        defaults={"is_enabled": _parse_bool(request.data.get("is_enabled", True))},
     )
     return Response(ConnectorAllowlistDomainSerializer(obj).data, status=201)
 
@@ -659,7 +711,7 @@ def connector_allowlist_detail(request, domain_id: str):
         return Response(status=204)
 
     if "is_enabled" in request.data:
-        obj.is_enabled = bool(request.data.get("is_enabled"))
+        obj.is_enabled = _parse_bool(request.data.get("is_enabled"))
         obj.save(update_fields=["is_enabled"])
 
     return Response(ConnectorAllowlistDomainSerializer(obj).data)
@@ -692,6 +744,8 @@ def run_connector_action(request):
     case = _get_case_for_connector_run(user, str(case_id))
     if not case:
         return Response({"detail": "Case not found"}, status=404)
+    if not user_has_perm(user, "case.view", customer_id=case.customer_id):
+        return Response({"detail": "Forbidden"}, status=403)
 
     inst = ConnectorInstance.objects.filter(id=connector_instance_id, is_enabled=True).first()
     if not inst:
@@ -779,8 +833,30 @@ def run_connector_action(request):
                 target_key=tkey,
                 target_value=tval,
             )
+            resolved_body = _render_payload_template(
+                ep.body_template,
+                secret=instance_secret,
+                case_id=str(case.id),
+                target_key=tkey,
+                target_value=tval,
+            )
+            redacted_body = _render_payload_template(
+                ep.body_template,
+                secret="[redacted]",
+                case_id=str(case.id),
+                target_key=tkey,
+                target_value=tval,
+            )
+            redacted_path = _render_template(
+                ep.path_template or "",
+                secret="[redacted]",
+                case_id=str(case.id),
+                target_key=tkey,
+                target_value=tval,
+            )
 
             url = base_url.rstrip("/") + ("/" + resolved_path.lstrip("/"))
+            redacted_url = base_url.rstrip("/") + ("/" + redacted_path.lstrip("/"))
 
             final_host = _domain_from_url(url)
             if not _is_domain_allowed(final_host):
@@ -792,14 +868,16 @@ def run_connector_action(request):
                 "method": (ep.method or "GET").upper(),
                 "url": url,
                 "headers": resolved_headers,
+                "body": resolved_body,
             })
 
             redacted_calls.append({
                 "key": tkey,
                 "value": tval,
                 "method": (ep.method or "GET").upper(),
-                "url": url,
-                "headers": _redact_headers(resolved_headers),
+                "url": redacted_url,
+                "headers": _redact_headers(resolved_headers, instance_secret),
+                "body": redacted_body,
             })
 
         hub_payload = {
@@ -911,9 +989,9 @@ def run_connector_action(request):
             }
         )
 
-    except Exception as e:
+    except Exception:
         run.status = "error"
-        run.result_message = str(e)[:2000]
+        run.result_message = "Connector execution failed"
         run.save(update_fields=["status", "result_message"])
         return Response(
             {"run_id": str(run.id), "status": "error", "message": run.result_message},
@@ -940,6 +1018,8 @@ def list_connector_results(request):
     case = _get_case_for_connector_read(user, str(case_id))
     if not case:
         return Response({"detail": "Case not found"}, status=404)
+    if not user_has_perm(user, "case.view", customer_id=case.customer_id):
+        return Response({"detail": "Forbidden"}, status=403)
 
     qs = ConnectorResult.objects.filter(case=case).order_by("-created_at")
 

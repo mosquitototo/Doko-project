@@ -47,7 +47,7 @@ Use templates to create consistent exports such as:
 - investigation summary
 - incident report
 - customer report
-- analyst handover
+- case handover
 - escalation report
 - closure report
 
@@ -1527,7 +1527,7 @@ Use this template for a complete internal export with comments, attachments, wor
   <section class="section">
     <div class="section-title-row">
       <div>
-        <div class="section-kicker">Analyst notes</div>
+        <div class="section-kicker">Case notes</div>
         <h2>Comments</h2>
       </div>
       <div class="section-count">{{ comments|length }} comment(s)</div>

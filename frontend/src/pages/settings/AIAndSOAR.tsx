@@ -383,7 +383,7 @@ function normalizeTimeoutSeconds(value: unknown, fallback = 60) {
 export default function AIAndSOARSettingsPage() {
   const toast = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canManage = can("chat.provider.manage");
 
   const [tab, setTab] = useState<"llm" | "soar" | "templates">("llm");

@@ -1,7 +1,9 @@
 import os
 import secrets
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 
 
 class Command(BaseCommand):
@@ -22,6 +24,12 @@ class Command(BaseCommand):
         if not password:
             password = secrets.token_urlsafe(18)
             generated_password = True
+
+        candidate = User(username=username, email=email)
+        try:
+            validate_password(password, user=candidate)
+        except ValidationError as exc:
+            raise CommandError("DOKO_ADMIN_PASSWORD does not meet Django password requirements.") from exc
 
         User.objects.create_superuser(username=username, email=email, password=password)
 

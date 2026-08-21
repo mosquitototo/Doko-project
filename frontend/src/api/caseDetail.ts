@@ -27,13 +27,13 @@ export type Attachment = {
   created_at: string;
 };
 
-export type EventDetailRow = {
+export type CaseDetailRow = {
   field?: string;
   value?: string;
   status?: string;
 };
 
-export type EventDetail = {
+export type CaseDetail = {
   id: string;
   case_number?: number | null;
   title: string;
@@ -47,8 +47,8 @@ export type EventDetail = {
   customer_name?: string | null;
   case_sources?: string[];
   owner_id_read?: number | null;
-  iocs?: EventDetailRow[];
-  assets?: EventDetailRow[];
+  iocs?: CaseDetailRow[];
+  assets?: CaseDetailRow[];
   auto_followup_enabled?: boolean;
   auto_followup_delay_value?: number;
   auto_followup_delay_unit?: "minute" | "hour" | "day" | "week" | "month" | null;
@@ -65,14 +65,14 @@ export type LinkedAlert = {
   case?: string | null;
 };
 
-export async function fetchEventDetail(id: string): Promise<EventDetail> {
-  const res = await api.get(`/api/events/${id}/`);
+export async function fetchCaseDetail(id: string): Promise<CaseDetail> {
+  const res = await api.get(`/api/cases/${id}/`);
   return res.data;
 }
 
-export async function updateEvent(id: string, payload: Partial<EventDetail>) {
+export async function updateCase(id: string, payload: Partial<CaseDetail>) {
   const csrfToken = await ensureCsrf();
-  const res = await api.patch(`/api/events/${id}/`, payload, {
+  const res = await api.patch(`/api/cases/${id}/`, payload, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -80,10 +80,10 @@ export async function updateEvent(id: string, payload: Partial<EventDetail>) {
   return res.data;
 }
 
-export async function updateEventStatus(id: string, status: string) {
+export async function updateCaseStatus(id: string, status: string) {
   const csrfToken = await ensureCsrf();
   const res = await api.patch(
-    `/api/events/${id}/`,
+    `/api/cases/${id}/`,
     { status },
     {
       headers: {
@@ -95,14 +95,14 @@ export async function updateEventStatus(id: string, status: string) {
 }
 
 export async function listComments(eventId: string): Promise<Comment[]> {
-  const res = await api.get(`/api/events/${eventId}/comments/`);
+  const res = await api.get(`/api/cases/${eventId}/comments/`);
   return Array.isArray(res.data) ? res.data : res.data.results ?? [];
 }
 
 export async function addComment(eventId: string, text: string): Promise<Comment> {
   const csrfToken = await ensureCsrf();
   const res = await api.post(
-    `/api/events/${eventId}/comments/`,
+    `/api/cases/${eventId}/comments/`,
     { text },
     {
       headers: {
@@ -137,7 +137,7 @@ export async function deleteComment(commentId: string) {
 }
 
 export async function listAttachments(eventId: string): Promise<Attachment[]> {
-  const res = await api.get(`/api/events/${eventId}/attachments/`);
+  const res = await api.get(`/api/cases/${eventId}/attachments/`);
   return Array.isArray(res.data) ? res.data : res.data.results ?? [];
 }
 
@@ -145,7 +145,7 @@ export async function uploadAttachment(eventId: string, file: File) {
   const csrfToken = await ensureCsrf();
   const form = new FormData();
   form.append("file", file);
-  const res = await api.post(`/api/events/${eventId}/attachments/`, form, {
+  const res = await api.post(`/api/cases/${eventId}/attachments/`, form, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -163,7 +163,7 @@ export async function deleteAttachment(attachmentId: string) {
 }
 
 export async function listLinkedAlerts(caseId: string): Promise<LinkedAlert[]> {
-  const res = await api.get(`/api/events/${caseId}/alerts/`);
+  const res = await api.get(`/api/cases/${caseId}/alerts/`);
   return Array.isArray(res.data) ? res.data : res.data.results ?? [];
 }
 
@@ -189,7 +189,7 @@ export type WorkbookInstanceItem = {
 
 export type WorkbookInstance = {
   id: string;
-  event: string;
+  case: string;
   template: string | null;
   created_at: string;
   items: WorkbookInstanceItem[];
@@ -234,7 +234,7 @@ export async function patchWorkbookItem(itemId: string, payload: any) {
 export async function archiveCase(caseId: string): Promise<void> {
   const csrfToken = await ensureCsrf();
   await api.post(
-    `/api/events/${caseId}/archive/`,
+    `/api/cases/${caseId}/archive/`,
     {},
     {
       headers: {
@@ -247,7 +247,7 @@ export async function archiveCase(caseId: string): Promise<void> {
 export async function unarchiveCase(caseId: string): Promise<void> {
   const csrfToken = await ensureCsrf();
   await api.post(
-    `/api/events/${caseId}/unarchive/`,
+    `/api/cases/${caseId}/unarchive/`,
     {},
     {
       headers: {
@@ -289,6 +289,6 @@ export type LinkedTask = {
 };
 
 export async function listLinkedTasks(caseId: string): Promise<LinkedTask[]> {
-  const res = await api.get(`/api/events/${caseId}/tasks/`);
+  const res = await api.get(`/api/cases/${caseId}/tasks/`);
   return Array.isArray(res.data) ? res.data : res.data.results ?? [];
 }

@@ -7,6 +7,7 @@ import socket
 import httpx
 import hashlib
 import hmac
+import json
 import os
 import time
 
@@ -25,6 +26,7 @@ class HttpCall(BaseModel):
     method: str = "GET"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
+    body: Any | None = None
 
 
 class HttpRunRequest(BaseModel):
@@ -125,17 +127,24 @@ def _derive_connector_hmac_secret() -> str:
     ).hexdigest()
 
 
-def _sign_body(secret: str, body: bytes, ts: str) -> str:
-    msg = ts.encode("utf-8") + b"." + body
+_USED_NONCES: dict[str, int] = {}
+
+
+def _sign_body(secret: str, body: bytes, ts: str, nonce: str) -> str:
+    msg = ts.encode("utf-8") + b"." + nonce.encode("utf-8") + b"." + body
     return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
 def _verify_hmac(request: Request, body: bytes) -> None:
     ts = request.headers.get("X-Doko-Timestamp", "").strip()
+    nonce = request.headers.get("X-Doko-Nonce", "").strip()
     sig = request.headers.get("X-Doko-Signature", "").strip()
 
-    if not ts or not sig:
+    if not ts or not nonce or not sig:
         raise HTTPException(status_code=401, detail="Missing connector signature")
+
+    if len(nonce) < 16 or len(nonce) > 128:
+        raise HTTPException(status_code=401, detail="Invalid connector nonce")
 
     try:
         timestamp = int(ts)
@@ -145,10 +154,20 @@ def _verify_hmac(request: Request, body: bytes) -> None:
     if abs(int(time.time()) - timestamp) > _HMAC_TOLERANCE_SECONDS:
         raise HTTPException(status_code=401, detail="Expired connector signature")
 
-    expected = _sign_body(_derive_connector_hmac_secret(), body, ts)
+    now = int(time.time())
+    for used_nonce, expires_at in list(_USED_NONCES.items()):
+        if expires_at <= now:
+            _USED_NONCES.pop(used_nonce, None)
+
+    if nonce in _USED_NONCES:
+        raise HTTPException(status_code=401, detail="Replayed connector signature")
+
+    expected = _sign_body(_derive_connector_hmac_secret(), body, ts, nonce)
 
     if not hmac.compare_digest(expected, sig):
         raise HTTPException(status_code=401, detail="Invalid connector signature")
+
+    _USED_NONCES[nonce] = now + _HMAC_TOLERANCE_SECONDS
     
 
 @app.post("/run/http")
@@ -171,11 +190,10 @@ async def run_http(request: Request):
 
     results: list[dict[str, Any]] = []
     proxy_url = _validate_proxy_url(req.proxy_url)
-    print("DOKO_CONNECTOR_HUB_PROXY_URL:", "***configured***" if proxy_url else "")
-
     client_kwargs = {
         "timeout": timeout_s,
         "follow_redirects": False,
+        "trust_env": False,
     }
 
     if proxy_url:
@@ -201,26 +219,25 @@ async def run_http(request: Request):
             headers = {str(k): str(v) for k, v in (c.headers or {}).items()}
 
             try:
-                r = await client.request(method=method, url=c.url, headers=headers)
+                async with client.stream(method=method, url=c.url, headers=headers, json=c.body) as r:
+                    chunks = []
+                    size = 0
+                    too_large = False
+                    async for chunk in r.aiter_bytes():
+                        size += len(chunk)
+                        if size > 1_000_000:
+                            too_large = True
+                            break
+                        chunks.append(chunk)
+                    raw = b"".join(chunks)
 
-                content_length = r.headers.get("content-length")
-                if content_length and int(content_length) > 1_000_000:
-                    results.append(
-                        {
-                            "key": c.key or "",
-                            "value": c.value or "",
-                            "http_status": r.status_code,
-                            "data": {"error": "Response too large"},
-                        }
-                    )
-                    continue
-
-                print("HUB CALL", method, c.url, "->", r.status_code, "ct=", r.headers.get("content-type"))
-                try:
-                    data = r.json()
-                except Exception as e:
-                    data = {"raw": (r.text or "")[:20000]}
-                    print("HUB CALL JSON PARSE ERROR", method, c.url, "->", str(e))
+                if too_large:
+                    data = {"error": "Response too large"}
+                else:
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        data = {"raw": raw.decode("utf-8", errors="replace")[:20000]}
 
                 results.append(
                     {
@@ -230,13 +247,13 @@ async def run_http(request: Request):
                         "data": data,
                     }
                 )
-            except Exception as e:
+            except Exception:
                 results.append(
                     {
                         "key": c.key or "",
                         "value": c.value or "",
                         "http_status": 0,
-                        "data": {"error": str(e)},
+                        "data": {"error": "Connector request failed"},
                     }
                 )
 

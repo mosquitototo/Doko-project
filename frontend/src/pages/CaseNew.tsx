@@ -28,7 +28,7 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 export default function TicketNew() {
   const navigate = useNavigate();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canAddCase = can("case.add");
 
   const [title, setTitle] = useState("");
@@ -107,7 +107,7 @@ export default function TicketNew() {
         customer: customerId || null,
         severity: severity || undefined,
         classification: classification || undefined,
-        owner_id: me?.is_staff && ownerId ? Number(ownerId) : undefined,
+        owner_id: me?.is_admin && ownerId ? Number(ownerId) : undefined,
       });
 
       navigate(`/cases/${created.id}`);
@@ -199,7 +199,7 @@ export default function TicketNew() {
                   className="h-11 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20 disabled:opacity-50"
                   value={ownerId}
                   onChange={(e) => setOwnerId(e.target.value)}
-                  disabled={busy || !me?.is_staff}
+                  disabled={busy || !me?.is_admin}
                 >
                   <option value="">— me (default)</option>
                   {usersArr
@@ -214,7 +214,7 @@ export default function TicketNew() {
                     ))}
                 </select>
                 <div className="mt-1 text-[11px] text-muted-foreground">
-                  {me?.is_staff
+                  {me?.is_admin
                     ? "If empty, backend will set owner to the current user."
                     : "Only staff can assign another owner. If empty, backend will set owner to the current user."}
                 </div>

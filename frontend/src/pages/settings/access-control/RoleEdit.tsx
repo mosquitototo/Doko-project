@@ -126,7 +126,7 @@ function categoryFromCode(code: string): string {
   if (a === "alert") return "Alerts";
   if (a === "hunt") return "Hunts";
   if (a === "task") return "Tasks";
-  if (a === "chat") return "Chatbot";
+  if (a === "chat") return "Catbot";
 
   if (a === "settings") {
     const b = parts[1] || "";
@@ -299,7 +299,7 @@ function buildCategoryPacks(cat: string, perms: PermissionItem[]): PackDef[] {
   }
 
 
-  if (cat === "Chatbot") {
+  if (cat === "Catbot") {
     const use: string[] = [];
     addIfAny(use, ["chat.use"]);
 
@@ -326,7 +326,7 @@ function buildCategoryPacks(cat: string, perms: PermissionItem[]): PackDef[] {
       packs.push({
         key: "chatbot_manage",
         kind: "manage",
-        label: "All chatbot",
+        label: "All Catbot",
         codes: uniq(manage),
       });
     }
@@ -572,7 +572,7 @@ export default function RoleEditPage() {
 
   const me = useMe();
 
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView = can("settings.access.roles.view");
   const canManage = can("settings.access.roles.manage");
 

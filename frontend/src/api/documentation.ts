@@ -3,6 +3,7 @@ import apiAutomationGuide from "../content/docs/doko_api_automation_documentatio
 import AutomationRulesGuide from "../content/docs/admin_automation_rules_documentation.md?raw";
 import ConnectorsGuide from "../content/docs/admin_connectors_documentation.md?raw";
 import CaseReportsGuide from "../content/docs/admin_case_reports_documentation.md?raw";
+import InstanceSettingsGuide from "../content/docs/admin_instance_settings_documentation.md?raw";
 
 export type DocumentationPage = {
   slug: string;
@@ -14,43 +15,51 @@ export type DocumentationPage = {
 
 export const DOCUMENTATION_PAGES: DocumentationPage[] = [
   {
-    slug: "administrator-soar-configuration-guide",
-    title: "SOAR/LLM & Investigation Templates",
+    slug: "administrator-instance-settings",
+    title: "Instance Settings",
     category: "Administration",
     summary:
-      "Configure SOAR providers, LLM provider and investigation templates.",
+      "Configure the outbound proxy, backups, audit exports and Splunk HEC.",
+    content: InstanceSettingsGuide,
+  },
+  {
+    slug: "administrator-soar-configuration-guide",
+    title: "LLM, SOAR & Investigation Templates",
+    category: "Administration",
+    summary:
+      "Configure LLM and SOAR providers and investigation templates.",
     content: soarAdminGuide, 
   },
   {
     slug: "api-automation-guide",
-    title: "API Automation Guide",
+    title: "API & Automation Guide",
     category: "Administration",
     summary:
-      "How to use Doko API.",
+      "Authenticate, use the Doko API and build automation workflows.",
     content: apiAutomationGuide,
   },
   {
     slug: "administrator-automation-rule",
-    title: "Automation rules Guide",
+    title: "Automation Rules",
     category: "Administration",
     summary:
-      "How to configure automation rules.",
+      "Configure triggers, conditions and actions for alerts, cases and hunts.",
     content: AutomationRulesGuide,
   },
   {
     slug: "administrator-connectors",
-    title: "Connectors configuration Guide",
+    title: "Connectors",
     category: "Administration",
     summary:
-      "How to configure connectors.",
+      "Configure allowlisted HTTP connectors and reusable endpoints.",
     content: ConnectorsGuide,
   },
   {
     slug: "administrator-case-reports",
-    title: "Case reports Guide",
+    title: "Case Reports",
     category: "Administration",
     summary:
-      "How to make a case report.",
+      "Create HTML and CSS templates for PDF case reports.",
     content: CaseReportsGuide,
   },
 ];

@@ -51,6 +51,7 @@ export type SOARProvider = {
   request_config: Record<string, unknown>;
   response_config: Record<string, unknown>;
   status_config: Record<string, unknown>;
+  verify_ssl: boolean;
   timeout_seconds: number;
   is_enabled: boolean;
   created_at?: string;
@@ -77,6 +78,7 @@ export type InvestigationTemplate = {
   output_mapping: Record<string, unknown>;
   status_mapping: Record<string, unknown>;
   execution_config: Record<string, unknown>;
+  execution_mode: "provider_default" | "sync" | "async";
   max_time_range_hours: number;
   risk_level: string;
   is_enabled: boolean;
@@ -107,6 +109,7 @@ export type CreateSOARProviderPayload = {
   request_config: Record<string, unknown>;
   response_config: Record<string, unknown>;
   status_config: Record<string, unknown>;
+  verify_ssl: boolean;
   timeout_seconds: number;
   is_enabled: boolean;
   api_key?: string;
@@ -131,6 +134,7 @@ export type CreateInvestigationTemplatePayload = {
   output_mapping: Record<string, unknown>;
   status_mapping: Record<string, unknown>;
   execution_config: Record<string, unknown>;
+  execution_mode: "provider_default" | "sync" | "async";
   max_time_range_hours: number;
   risk_level: string;
   is_enabled: boolean;
@@ -198,6 +202,7 @@ export function buildSimpleSOARPayload(
     request_config: {},
     response_config: {},
     status_config: {},
+    verify_ssl: true,
     timeout_seconds: payload.timeout_seconds,
     is_enabled: payload.is_enabled,
     api_key: payload.api_key,
@@ -299,6 +304,7 @@ export function buildSimpleInvestigationTemplatePayload(
       },
       required_launch_fields: targetObjectField ? [targetObjectField] : [],
     },
+    execution_mode: "provider_default",
     max_time_range_hours: 24,
     risk_level: "low",
     is_enabled: payload.is_enabled,

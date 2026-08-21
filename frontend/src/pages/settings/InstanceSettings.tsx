@@ -12,6 +12,8 @@ import {
   exportAuditLogs,
   saveSplunkHecSettings,
   testSplunkHecConnection,
+  saveSyslogSettings,
+  testSyslogConnection,
   type InstanceSettingsPayload,
 } from "../../api/settingsInstance";
 
@@ -49,7 +51,7 @@ function isValidHttpUrl(value: string) {
 export default function InstanceSettings() {
   const { push } = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canManage = can("settings.instance.manage");
 
   const [loading, setLoading] = useState(true);
@@ -60,6 +62,8 @@ export default function InstanceSettings() {
   const [busyAudit, setBusyAudit] = useState(false);
   const [busySplunk, setBusySplunk] = useState(false);
   const [busySplunkTest, setBusySplunkTest] = useState(false);
+  const [busySyslog, setBusySyslog] = useState(false);
+  const [busySyslogTest, setBusySyslogTest] = useState(false);
 
   const [confirmBackup, setConfirmBackup] = useState(false);
   const [confirmBackupRestore, setConfirmBackupRestore] = useState(false);
@@ -80,6 +84,15 @@ export default function InstanceSettings() {
   const [splunkIndex, setSplunkIndex] = useState("");
   const [splunkSource, setSplunkSource] = useState("doko:audit");
   const [splunkSourcetype, setSplunkSourcetype] = useState("_json");
+
+  const [syslogEnabled, setSyslogEnabled] = useState(false);
+  const [syslogHost, setSyslogHost] = useState("");
+  const [syslogPort, setSyslogPort] = useState("514");
+  const [syslogProtocol, setSyslogProtocol] = useState<"udp" | "tcp" | "tcp_tls">("udp");
+  const [syslogFormat, setSyslogFormat] = useState<"rfc5424" | "rfc3164" | "cef">("rfc5424");
+  const [syslogCaCertificate, setSyslogCaCertificate] = useState("");
+  const [syslogCaFilename, setSyslogCaFilename] = useState("");
+  const [syslogHasCaCertificate, setSyslogHasCaCertificate] = useState(false);
 
   const [lastBackupId, setLastBackupId] = useState("");
   const [lastBackupFile, setLastBackupFile] = useState("");
@@ -118,6 +131,15 @@ export default function InstanceSettings() {
         setSplunkIndex(data.splunk_hec?.index || "");
         setSplunkSource(data.splunk_hec?.source || "doko:audit");
         setSplunkSourcetype(data.splunk_hec?.sourcetype || "_json");
+
+        setSyslogEnabled(!!data.syslog?.enabled);
+        setSyslogHost(data.syslog?.host || "");
+        setSyslogPort(String(data.syslog?.port || 514));
+        setSyslogProtocol(data.syslog?.protocol || "udp");
+        setSyslogFormat(data.syslog?.format || "rfc5424");
+        setSyslogCaCertificate("");
+        setSyslogCaFilename("");
+        setSyslogHasCaCertificate(!!data.syslog?.has_ca_certificate);
 
         setLastBackupId(data.last_backup?.id || "");
         setLastBackupFile(data.last_backup?.filename || data.last_backup_file || "");
@@ -313,7 +335,7 @@ export default function InstanceSettings() {
 
     const normalizedSplunkEndpoint = splunkEndpoint.trim();
 
-    if (!isValidHttpUrl(normalizedSplunkEndpoint)) {
+    if (splunkEnabled && !isValidHttpUrl(normalizedSplunkEndpoint)) {
       push({
         kind: "error",
         title: "Invalid Splunk HEC endpoint",
@@ -325,7 +347,7 @@ export default function InstanceSettings() {
     setBusySplunk(true);
     try {
       await saveSplunkHecSettings({
-        enabled: true,
+        enabled: splunkEnabled,
         endpoint: normalizedSplunkEndpoint,
         ...(splunkToken ? { token: splunkToken } : {}),
         index: splunkIndex.trim(),
@@ -388,6 +410,131 @@ export default function InstanceSettings() {
       });
     } finally {
       setBusySplunkTest(false);
+    }
+  }
+
+  function validateSyslog(testing: boolean) {
+    const port = Number(syslogPort.trim());
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      push({
+        kind: "error",
+        title: "Invalid Syslog port",
+        message: "Port must be an integer between 1 and 65535.",
+      });
+      return null;
+    }
+
+    if ((testing || syslogEnabled) && !syslogHost.trim()) {
+      push({
+        kind: "error",
+        title: "Invalid Syslog host",
+        message: "Host is required.",
+      });
+      return null;
+    }
+
+    if (
+      (testing || syslogEnabled) &&
+      syslogProtocol === "tcp_tls" &&
+      !syslogCaCertificate &&
+      !syslogHasCaCertificate
+    ) {
+      push({
+        kind: "error",
+        title: "Missing Syslog CA certificate",
+        message: "Import the CA certificate used to verify the Syslog collector.",
+      });
+      return null;
+    }
+
+    return port;
+  }
+
+  async function onSaveSyslog() {
+    if (!canManage) return;
+    const port = validateSyslog(false);
+    if (port === null) return;
+
+    setBusySyslog(true);
+    try {
+      const result = await saveSyslogSettings({
+        enabled: syslogEnabled,
+        host: syslogHost.trim(),
+        port,
+        protocol: syslogProtocol,
+        format: syslogFormat,
+        ...(syslogCaCertificate ? { ca_certificate: syslogCaCertificate } : {}),
+      });
+      setSyslogCaCertificate("");
+      setSyslogCaFilename("");
+      setSyslogHasCaCertificate(!!result?.has_ca_certificate);
+      push({ kind: "success", title: "Syslog settings saved" });
+    } catch (e: any) {
+      push({
+        kind: "error",
+        title: "Error",
+        message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network"),
+      });
+    } finally {
+      setBusySyslog(false);
+    }
+  }
+
+  async function onTestSyslog() {
+    if (!canManage) return;
+    const port = validateSyslog(true);
+    if (port === null) return;
+
+    setBusySyslogTest(true);
+    try {
+      const result = await testSyslogConnection({
+        enabled: true,
+        host: syslogHost.trim(),
+        port,
+        protocol: syslogProtocol,
+        format: syslogFormat,
+        ...(syslogCaCertificate ? { ca_certificate: syslogCaCertificate } : {}),
+      });
+      push({
+        kind: "success",
+        title: "Syslog connection successful",
+        message: result.detail,
+      });
+    } catch (e: any) {
+      push({
+        kind: "error",
+        title: "Syslog connection failed",
+        message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network"),
+      });
+    } finally {
+      setBusySyslogTest(false);
+    }
+  }
+
+  async function onSyslogCaFileChange(file: File | null) {
+    if (!file) {
+      setSyslogCaCertificate("");
+      setSyslogCaFilename("");
+      return;
+    }
+    if (file.size > 1_048_576) {
+      push({
+        kind: "error",
+        title: "Invalid CA certificate",
+        message: "The certificate must not exceed 1 MB.",
+      });
+      return;
+    }
+
+    try {
+      setSyslogCaCertificate(await file.text());
+      setSyslogCaFilename(file.name);
+    } catch {
+      push({
+        kind: "error",
+        title: "Invalid CA certificate",
+        message: "Unable to read the selected certificate.",
+      });
     }
   }
 
@@ -730,6 +877,118 @@ export default function InstanceSettings() {
               placeholder="_json"
               disabled={busySplunk}
             />
+          </label>
+        </div>
+      </Card>
+
+      <Card className="p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <div className="text-lg font-semibold text-foreground">
+              Syslog export
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Send sanitized audit events to a Syslog collector.
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onTestSyslog}
+              disabled={busySyslogTest || busySyslog}
+              className="rounded-2xl border border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+              title="Test Syslog connection"
+            >
+              {busySyslogTest ? "Testing..." : "Test connection"}
+            </button>
+
+            <SaveButton
+              onClick={onSaveSyslog}
+              disabled={busySyslog || busySyslogTest}
+              iconOnly={false}
+              label={busySyslog ? "Saving..." : "Save"}
+              title="Save Syslog settings"
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-1">
+            <FieldLabel>Enabled</FieldLabel>
+            <select
+              className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+              value={syslogEnabled ? "1" : "0"}
+              onChange={(e) => setSyslogEnabled(e.target.value === "1")}
+              disabled={busySyslog}
+            >
+              <option value="0">Disabled</option>
+              <option value="1">Enabled</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1">
+            <FieldLabel>Host</FieldLabel>
+            <input
+              className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+              value={syslogHost}
+              onChange={(e) => setSyslogHost(e.target.value)}
+              placeholder="syslog.example.com"
+              disabled={busySyslog}
+            />
+          </label>
+
+          <label className="grid gap-1">
+            <FieldLabel>Port</FieldLabel>
+            <input
+              className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+              value={syslogPort}
+              onChange={(e) => setSyslogPort(e.target.value)}
+              placeholder={syslogProtocol === "tcp_tls" ? "6514" : "514"}
+              disabled={busySyslog}
+            />
+          </label>
+
+          <label className="grid gap-1">
+            <FieldLabel>Protocol</FieldLabel>
+            <select
+              className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+              value={syslogProtocol}
+              onChange={(e) => setSyslogProtocol(e.target.value as "udp" | "tcp" | "tcp_tls")}
+              disabled={busySyslog}
+            >
+              <option value="udp">UDP</option>
+              <option value="tcp">TCP</option>
+              <option value="tcp_tls">TCP/TLS</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1 sm:col-span-2">
+            <FieldLabel>Format</FieldLabel>
+            <select
+              className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+              value={syslogFormat}
+              onChange={(e) => setSyslogFormat(e.target.value as "rfc5424" | "rfc3164" | "cef")}
+              disabled={busySyslog}
+            >
+              <option value="rfc5424">RFC 5424</option>
+              <option value="rfc3164">RFC 3164</option>
+              <option value="cef">CEF</option>
+            </select>
+          </label>
+
+          <label className="grid gap-1 sm:col-span-2">
+            <FieldLabel>CA certificate</FieldLabel>
+            <input
+              type="file"
+              accept=".pem,.crt,.cer,application/x-pem-file,application/pkix-cert"
+              className="block w-full rounded-2xl border border-border bg-card px-3 py-2.5 text-sm text-foreground file:mr-3 file:rounded-xl file:border-0 file:bg-background file:px-3 file:py-2 file:text-sm file:font-medium file:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              onChange={(e) => void onSyslogCaFileChange(e.target.files?.[0] || null)}
+              disabled={busySyslog || syslogProtocol !== "tcp_tls"}
+            />
+            <div className="text-xs text-muted-foreground">
+              {syslogCaFilename || (syslogHasCaCertificate ? "A CA certificate is configured." : "Required for TCP/TLS.")}
+            </div>
           </label>
         </div>
       </Card>

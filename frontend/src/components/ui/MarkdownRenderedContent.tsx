@@ -188,6 +188,11 @@ export default function MarkdownRenderedContent(props: Props) {
           color: hsl(var(--foreground));
         }
 
+        .markdown-editor .mdxeditor [contenteditable],
+        .markdown-rendered-content .mdxeditor [contenteditable] {
+          color: inherit;
+        }
+
         .markdown-editor .mdxeditor-toolbar {
           opacity: 0;
           transition: opacity 120ms ease;

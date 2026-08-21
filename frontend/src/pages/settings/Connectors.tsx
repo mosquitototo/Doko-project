@@ -159,7 +159,7 @@ function isValidHttpsUrl(value: string) {
 export default function Connectors() {
   const { push } = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView = can("settings.connectors.view");
   const canManage = can("settings.connectors.manage");
   const canDelete = can("settings.connectors.delete");
@@ -401,6 +401,7 @@ export default function Connectors() {
   const [epBaseUrl, setEpBaseUrl] = useState("");
   const [epPathTemplate, setEpPathTemplate] = useState("");
   const [epHeadersText, setEpHeadersText] = useState(DEFAULT_HEADERS_TEXT);
+  const [epBodyText, setEpBodyText] = useState("");
   const [epTimeoutMs, setEpTimeoutMs] = useState(8000);
 
   const [editingEndpointId, setEditingEndpointId] = useState<string>("");
@@ -422,6 +423,7 @@ export default function Connectors() {
       setEpBaseUrl("");
       setEpPathTemplate("");
       setEpHeadersText(DEFAULT_HEADERS_TEXT);
+      setEpBodyText("");
       setEpTimeoutMs(8000);
       return;
     }
@@ -433,6 +435,7 @@ export default function Connectors() {
     setEpBaseUrl(endpoint.base_url || "");
     setEpPathTemplate(endpoint.path_template || "");
     setEpHeadersText(prettyJson((endpoint as any).headers ?? DEFAULT_HEADERS_OBJ));
+    setEpBodyText(endpoint.body_template == null ? "" : prettyJson(endpoint.body_template));
     setEpTimeoutMs(Number(endpoint.timeout_ms ?? 8000));
   }
 
@@ -507,6 +510,15 @@ export default function Connectors() {
       });
       return;
     }
+    const bodyTemplate = epBodyText.trim() ? safeJsonParse(epBodyText) : null;
+    if (epBodyText.trim() && bodyTemplate == null) {
+      push({
+        kind: "error",
+        title: "Invalid body JSON",
+        message: "The request body must be valid JSON.",
+      });
+      return;
+    }
 
     setLoading(true);
     try {
@@ -520,6 +532,7 @@ export default function Connectors() {
           base_url,
           path_template,
           headers: headersObj,
+          body_template: bodyTemplate,
           timeout_ms,
         });
         push({ kind: "success", title: "Endpoint updated" });
@@ -532,6 +545,7 @@ export default function Connectors() {
           base_url,
           path_template,
           headers: headersObj,
+          body_template: bodyTemplate,
           timeout_ms,
           is_enabled: true,
         });
@@ -1113,6 +1127,18 @@ export default function Connectors() {
                     </span>{" "}
                     to inject the instance secret.
                   </div>
+                </div>
+
+                <div className="pt-4">
+                  <FieldLabel>Request body (JSON)</FieldLabel>
+                  <SettingTextarea
+                    className="min-h-[140px] resize-y font-mono text-[12px]"
+                    rows={6}
+                    value={epBodyText}
+                    onChange={(e) => setEpBodyText(e.target.value)}
+                    disabled={loading || !canManage}
+                    placeholder={'{"observable":"{{value}}"}'}
+                  />
                 </div>
 
                 <div className="flex items-center justify-between gap-2 pt-2">

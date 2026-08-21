@@ -130,7 +130,7 @@ export default function DataModels() {
   const { push } = useToast();
 
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView =
     can("settings.data_models.view") || can("settings.data_models.manage");
   const canManage = can("settings.data_models.manage");

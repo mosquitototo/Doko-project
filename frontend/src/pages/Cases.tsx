@@ -6,7 +6,7 @@ import {
   fetchTickets,
   updateTicket,
   deleteCase,
-  type EventListItem,
+  type CaseListItem,
 } from "../api/cases";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
 import SeverityBadge from "../components/ui/SeverityBadge";
@@ -227,7 +227,7 @@ function HeaderSortLabel({
 
 
 export default function Tickets() {
-  const [items, setItems] = useState<EventListItem[]>([]);
+  const [items, setItems] = useState<CaseListItem[]>([]);
   const [serverCount, setServerCount] = useState(0);
 
   const itemsArr = useMemo(
@@ -287,7 +287,7 @@ export default function Tickets() {
   const [busyBulkAction, setBusyBulkAction] = useState(false);
 
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canDeleteCase = can("case.delete");
   const canAddCase = can("case.add");
   const canUpdateCase = can("case.update");

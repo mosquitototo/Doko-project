@@ -1,6 +1,8 @@
 import copy
 import datetime
 import requests
+import json
+import logging
 
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -8,6 +10,9 @@ from django.utils import timezone
 from .crypto_secrets import decrypt_secret
 from .models import SOARProvider, InvestigationTemplate
 from .outbound_proxy import build_outbound_proxies
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_RUN_ID_PATHS = [
@@ -36,6 +41,36 @@ DEFAULT_RESULT_ITEMS_PATHS = [
     "records",
     "data.records",
 ]
+
+SENSITIVE_RESPONSE_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "password",
+    "secret",
+    "set_cookie",
+    "token",
+}
+
+
+def _sanitize_soar_data(value, *, depth: int = 0):
+    if depth >= 8:
+        return "[truncated]"
+    if isinstance(value, dict):
+        result = {}
+        for key, item in list(value.items())[:200]:
+            normalized = str(key).lower().replace("-", "_")
+            if any(secret_key in normalized for secret_key in SENSITIVE_RESPONSE_KEYS):
+                result[str(key)] = "[redacted]"
+            else:
+                result[str(key)] = _sanitize_soar_data(item, depth=depth + 1)
+        return result
+    if isinstance(value, list):
+        return [_sanitize_soar_data(item, depth=depth + 1) for item in value[:200]]
+    if isinstance(value, str):
+        return value[:20000]
+    return value
 
 
 def validate_soar_provider_url(url: str):
@@ -483,76 +518,54 @@ class SOARService:
 
         auth = self._build_auth(context)
 
-        safe_headers = dict(headers)
-        sensitive_header_names = {
-            "authorization",
-            "proxy-authorization",
-            "ph-auth-token",
-            "x-api-key",
-            "x-n8n-api-key",
-            "api-key",
-            "apikey",
-        }
-
-        auth_config = self.provider.auth_config or {}
-        configured_header_name = str(auth_config.get("header_name") or "").strip().lower()
-        if configured_header_name:
-            sensitive_header_names.add(configured_header_name)
-
-        for key in list(safe_headers.keys()):
-            normalized_key = str(key or "").strip().lower()
-            if (
-                normalized_key in sensitive_header_names
-                or "token" in normalized_key
-                or "secret" in normalized_key
-                or "key" in normalized_key
-            ):
-                safe_headers[key] = "***masked***"
-
-        print("DOKO_SOAR_HTTP_REQUEST:", {
-            "method": method,
-            "url": url,
-            "auth_type": self.provider.auth_type,
-            "headers": safe_headers,
-            "params": params,
-            "payload": payload,
-            "has_basic_auth": bool(auth),
-        })
-
         timeout_seconds = min(max(int(self.provider.timeout_seconds or 30), 1), 90)
 
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            params=params,
-            json=payload,
-            auth=auth,
-            timeout=timeout_seconds,
-            allow_redirects=False,
-            proxies=build_outbound_proxies(),
-        )
-
-        print("DOKO_SOAR_HTTP_RESPONSE_STATUS:", response.status_code)
-        print("DOKO_SOAR_HTTP_RESPONSE_TEXT_PREVIEW:", response.text[:2000])
-
-        response.raise_for_status()
-
+        response = None
         try:
-            data = response.json()
-        except ValueError:
-            data = {
-                "raw_text": response.text,
-            }
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                params=params,
+                json=payload,
+                auth=auth,
+                timeout=timeout_seconds,
+                allow_redirects=False,
+                proxies=build_outbound_proxies(),
+                verify=bool(self.provider.verify_ssl),
+                stream=True,
+            )
+            response.raise_for_status()
+            chunks = []
+            size = 0
+            for chunk in response.iter_content(chunk_size=65536):
+                size += len(chunk)
+                if size > 2 * 1024 * 1024:
+                    raise ValidationError("SOAR response is too large")
+                chunks.append(chunk)
+            raw = b"".join(chunks)
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                data = {"raw_text": raw.decode("utf-8", errors="replace")[:20000]}
+        except requests.RequestException as exc:
+            logger.warning(
+                "SOAR request failed: provider=%s method=%s status=%s error_type=%s",
+                self.provider.code,
+                method,
+                getattr(response, "status_code", "no_response"),
+                type(exc).__name__,
+            )
+            raise ValidationError("SOAR provider request failed") from exc
+        finally:
+            if response is not None:
+                response.close()
 
         return {
             "request": {
                 "method": method,
-                "url": url,
-                "params": params,
-                "payload": payload,
             },
-            "response": data,
+            "response": _sanitize_soar_data(data),
         }
 
     def _get_launch_run_id_paths(self) -> list[str]:
@@ -801,22 +814,6 @@ class SOARService:
             **mapped_payload,
         }
 
-        print("DOKO_SOAR_LAUNCH_PAYLOAD_BUILD:", {
-            "source": "chat" if run is not None else "automation",
-            "template_id": str(getattr(template, "id", "") or ""),
-            "template_code": template.code,
-            "remote_template_code": template.remote_template_code,
-            "provider_kind": self.provider.provider_kind,
-            "mapping_produced_payload": mapping_produced_payload,
-            "launch_fields_payload": launch_fields_payload,
-            "template_identifier_payload": template_identifier_payload,
-            "mapped_payload": mapped_payload,
-            "default_payload": default_payload,
-            "input_mapping": template.input_mapping or {},
-            "execution_config": template.execution_config or {},
-            "request_body_template": normalized_request_config.get("body_template"),
-        })
-
         current_body_template = normalized_request_config.get("body_template", None)
 
         if current_body_template in (None, "", {}):
@@ -939,9 +936,6 @@ class SOARService:
 
         mapped = self._extract_output_mapping(template, response_payload)
 
-        print("DOKO_SOAR_RESULT_RESPONSE:", response_payload)
-        print("DOKO_SOAR_RESULT_MAPPED:", mapped)
-        
         return {
             "run_id": external_run_id,
             **mapped,

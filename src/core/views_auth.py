@@ -9,6 +9,7 @@ from django.contrib.auth import (
 )
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.contrib.sessions.models import Session
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -26,6 +27,7 @@ from rest_framework.views import APIView
 from rest_framework.throttling import AnonRateThrottle
 
 from .models import AuditLog
+from .audit import sanitize_audit_metadata
 
 
 
@@ -47,6 +49,8 @@ def get_client_ip(request) -> str:
 
 def audit_safe_create(**kwargs):
     try:
+        kwargs["object_repr"] = ""
+        kwargs["metadata"] = sanitize_audit_metadata(kwargs.get("metadata") or {})
         AuditLog.objects.create(**kwargs)
     except Exception:
         logger.exception("AuditLog create failed (auth)")
@@ -297,40 +301,6 @@ class SessionLogoutView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class AuthTokenWithAuditView(APIView):
-    authentication_classes = []
-    permission_classes = []
-    throttle_classes = [AuthRateThrottle]
-
-    def post(self, request, *args, **kwargs):
-        ip, ua, path, method = get_request_meta(request)
-
-        audit_safe_create(
-            actor=None,
-            actor_username="",
-            action="auth.api_token",
-            success=False,
-            status_code=405,
-            method=method,
-            path=path,
-            ip_address=ip,
-            user_agent=ua,
-            duration_ms=0,
-            object_type="auth",
-            object_id="",
-            object_repr="",
-            metadata={
-                "outcome": "disabled",
-                "reason": "api_token_creation_requires_authenticated_session",
-            },
-        )
-
-        return Response(
-            {"detail": "API token creation is only available from an authenticated session."},
-            status=status.HTTP_405_METHOD_NOT_ALLOWED,
-        )
-
-
 class ApiTokenListCreateView(APIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -380,11 +350,10 @@ class ApiTokenListCreateView(APIView):
             user_agent=ua,
             duration_ms=int((time.time() - t0) * 1000),
             object_type="auth_token",
-            object_id=(token_instance.token_key or "")[:80],
-            object_repr=(token_instance.token_key or "")[:255],
+            object_id=str(request.user.id),
+            object_repr="",
             metadata={
                 "outcome": "success",
-                "token_key": token_instance.token_key,
                 "expiry": token_instance.expiry.isoformat() if token_instance.expiry else None,
                 "never_expire": bool(never_expire),
             },
@@ -417,9 +386,6 @@ class ApiTokenRevokeView(APIView):
         if not token_instance:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        token_key = token_instance.token_key
-        object_id = str(getattr(token_instance, "pk", ""))[:80]
-        object_repr = (token_key or "")[:255]
         token_instance.delete()
 
         audit_safe_create(
@@ -434,18 +400,16 @@ class ApiTokenRevokeView(APIView):
             user_agent=ua,
             duration_ms=int((time.time() - t0) * 1000),
             object_type="auth_token",
-            object_id=object_id,
-            object_repr=object_repr,
+            object_id=str(request.user.id),
+            object_repr="",
             metadata={
                 "outcome": "success",
-                "token_key": token_key,
             },
         )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-###### reset pwd token
 token_generator = PasswordResetTokenGenerator()
 
 
@@ -590,6 +554,12 @@ class PasswordResetConfirmView(APIView):
         u.set_password(new_password)
         u.save(update_fields=["password"])
         AuthToken.objects.filter(user=u).delete()
+        for session in Session.objects.all().iterator():
+            try:
+                if str(session.get_decoded().get("_auth_user_id")) == str(u.pk):
+                    session.delete()
+            except Exception:
+                session.delete()
 
         audit_safe_create(
             actor=None,

@@ -118,7 +118,7 @@ export default function SettingsWorkbooks() {
 
   const me = useMe();
 
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView =
     can("settings.workbooks.view") || can("settings.workbooks.manage");
   const canManage = can("settings.workbooks.manage");

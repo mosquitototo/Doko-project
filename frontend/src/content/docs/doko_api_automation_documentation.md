@@ -75,7 +75,7 @@ Use this when a script needs to obtain a token with a username or email and pass
 curl -X POST "https://YOUR_DOKO_INSTANCE/api/auth/token/" \
   -H "Content-Type: application/json" \
   -d '{
-    "username": "analyst1",
+    "username": "api-user",
     "password": "PASSWORD"
   }'
 ```
@@ -89,7 +89,7 @@ base_url = "https://YOUR_DOKO_INSTANCE"
 
 response = requests.post(
     f"{base_url}/api/auth/token/",
-    json={"username": "analyst1", "password": "PASSWORD"},
+    json={"username": "api-user", "password": "PASSWORD"},
     timeout=30,
 )
 response.raise_for_status()
@@ -158,14 +158,14 @@ Typical response:
 ```json
 {
   "id": 12,
-  "username": "analyst1",
-  "email": "analyst1@example.com",
-  "is_staff": false,
+  "username": "api-user",
+  "email": "api-user@example.com",
+  "is_admin": false,
   "timezone": "Europe/Paris",
   "avatar_url": null,
   "permissions": ["case.view", "case.add", "alert.view"],
   "rbac_debug": {
-    "direct_roles": ["SOC Analyst"]
+    "direct_roles": ["Case Operator"]
   }
 }
 ```
@@ -210,7 +210,7 @@ The returned customer `id` values can be used as `customer` in alerts, cases and
 ### List assignable users
 
 ```bash
-curl "$DOKO_URL/api/users-lite/?q=analyst" \
+curl "$DOKO_URL/api/users-lite/?q=operator" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
@@ -222,7 +222,7 @@ import requests
 response = requests.get(
     f"{DOKO_URL}/api/users-lite/",
     headers=HEADERS,
-    params={"q": "analyst"},
+    params={"q": "operator"},
     timeout=30,
 )
 response.raise_for_status()
@@ -631,7 +631,7 @@ print(response.json())
 
 ### Delete an alert
 
-Deletion is soft deletion.
+Deletion is permanent. Related records are deleted or handled according to their database relationship.
 
 ```bash
 curl -X POST "$DOKO_URL/api/alerts/ALERT_UUID/delete/" \
@@ -649,7 +649,7 @@ response = requests.post(
     timeout=30,
 )
 response.raise_for_status()
-print(response.json())
+print(response.status_code)
 ```
 
 ### Add a comment to an alert
@@ -797,7 +797,7 @@ _______________________________________________________________________
 
 ## Cases
 
-The case endpoints use `/api/events/`.
+The case endpoints use `/api/cases/`.
 
 ### Case fields
 
@@ -835,7 +835,7 @@ archived
 ### List cases
 
 ```bash
-curl "$DOKO_URL/api/events/?status=open&severity=high&include_archived=0" \
+curl "$DOKO_URL/api/cases/?status=open&severity=high&include_archived=0" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
@@ -845,7 +845,7 @@ Python example:
 import requests
 
 response = requests.get(
-    f"{DOKO_URL}/api/events/",
+    f"{DOKO_URL}/api/cases/",
     headers=HEADERS,
     params={"status": "open", "severity": "high", "include_archived": "0"},
     timeout=30,
@@ -872,7 +872,7 @@ ordering
 ### Create a case
 
 ```bash
-curl -X POST "$DOKO_URL/api/events/" \
+curl -X POST "$DOKO_URL/api/cases/" \
   -H "Authorization: Token $DOKO_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -912,7 +912,7 @@ payload = {
 }
 
 response = requests.post(
-    f"{DOKO_URL}/api/events/",
+    f"{DOKO_URL}/api/cases/",
     headers=JSON_HEADERS,
     json=payload,
     timeout=30,
@@ -924,7 +924,7 @@ print(response.json())
 ### Read a case
 
 ```bash
-curl "$DOKO_URL/api/events/CASE_UUID/" \
+curl "$DOKO_URL/api/cases/CASE_UUID/" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
@@ -934,7 +934,7 @@ Python example:
 import requests
 
 response = requests.get(
-    f"{DOKO_URL}/api/events/CASE_UUID/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/",
     headers=HEADERS,
     timeout=30,
 )
@@ -945,7 +945,7 @@ print(response.json())
 ### Modify a case
 
 ```bash
-curl -X PATCH "$DOKO_URL/api/events/CASE_UUID/" \
+curl -X PATCH "$DOKO_URL/api/cases/CASE_UUID/" \
   -H "Authorization: Token $DOKO_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -975,7 +975,7 @@ payload = {
 }
 
 response = requests.patch(
-    f"{DOKO_URL}/api/events/CASE_UUID/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/",
     headers=JSON_HEADERS,
     json=payload,
     timeout=30,
@@ -989,7 +989,7 @@ print(response.json())
 IoCs are replaced as a full list.
 
 ```bash
-curl -X PATCH "$DOKO_URL/api/events/CASE_UUID/" \
+curl -X PATCH "$DOKO_URL/api/cases/CASE_UUID/" \
   -H "Authorization: Token $DOKO_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1005,7 +1005,7 @@ Python example:
 ```python
 import requests
 
-case_url = f"{DOKO_URL}/api/events/CASE_UUID/"
+case_url = f"{DOKO_URL}/api/cases/CASE_UUID/"
 case_response = requests.get(case_url, headers=HEADERS, timeout=30)
 case_response.raise_for_status()
 data = case_response.json()
@@ -1029,7 +1029,7 @@ print(response.json())
 Assets are replaced as a full list.
 
 ```bash
-curl -X PATCH "$DOKO_URL/api/events/CASE_UUID/" \
+curl -X PATCH "$DOKO_URL/api/cases/CASE_UUID/" \
   -H "Authorization: Token $DOKO_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1045,7 +1045,7 @@ Python example:
 ```python
 import requests
 
-case_url = f"{DOKO_URL}/api/events/CASE_UUID/"
+case_url = f"{DOKO_URL}/api/cases/CASE_UUID/"
 case_response = requests.get(case_url, headers=HEADERS, timeout=30)
 case_response.raise_for_status()
 data = case_response.json()
@@ -1067,7 +1067,7 @@ print(response.json())
 ### Add a comment to a case
 
 ```bash
-curl -X POST "$DOKO_URL/api/events/CASE_UUID/comments/" \
+curl -X POST "$DOKO_URL/api/cases/CASE_UUID/comments/" \
   -H "Authorization: Token $DOKO_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1081,7 +1081,7 @@ Python example:
 import requests
 
 response = requests.post(
-    f"{DOKO_URL}/api/events/CASE_UUID/comments/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/comments/",
     headers=JSON_HEADERS,
     json={"text": "<p>Initial analysis completed.</p>"},
     timeout=30,
@@ -1126,7 +1126,7 @@ removed.raise_for_status()
 ### List case attachments
 
 ```bash
-curl "$DOKO_URL/api/events/CASE_UUID/attachments/" \
+curl "$DOKO_URL/api/cases/CASE_UUID/attachments/" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
@@ -1136,7 +1136,7 @@ Python example:
 import requests
 
 response = requests.get(
-    f"{DOKO_URL}/api/events/CASE_UUID/attachments/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/attachments/",
     headers=HEADERS,
     timeout=30,
 )
@@ -1147,7 +1147,7 @@ print(response.json())
 ### Add a case attachment
 
 ```bash
-curl -X POST "$DOKO_URL/api/events/CASE_UUID/attachments/" \
+curl -X POST "$DOKO_URL/api/cases/CASE_UUID/attachments/" \
   -H "Authorization: Token $DOKO_TOKEN" \
   -F "file=@/path/to/evidence.pdf"
 ```
@@ -1159,7 +1159,7 @@ import requests
 
 with open("/path/to/evidence.pdf", "rb") as file_handle:
     response = requests.post(
-        f"{DOKO_URL}/api/events/CASE_UUID/attachments/",
+        f"{DOKO_URL}/api/cases/CASE_UUID/attachments/",
         headers=HEADERS,
         files={"file": ("evidence.pdf", file_handle)},
         timeout=60,
@@ -1267,12 +1267,12 @@ removed.raise_for_status()
 ### Archive and unarchive a case
 
 ```bash
-curl -X POST "$DOKO_URL/api/events/CASE_UUID/archive/" \
+curl -X POST "$DOKO_URL/api/cases/CASE_UUID/archive/" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
 ```bash
-curl -X POST "$DOKO_URL/api/events/CASE_UUID/unarchive/" \
+curl -X POST "$DOKO_URL/api/cases/CASE_UUID/unarchive/" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
@@ -1282,14 +1282,14 @@ Python example:
 import requests
 
 archive = requests.post(
-    f"{DOKO_URL}/api/events/CASE_UUID/archive/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/archive/",
     headers=HEADERS,
     timeout=30,
 )
 archive.raise_for_status()
 
 unarchive = requests.post(
-    f"{DOKO_URL}/api/events/CASE_UUID/unarchive/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/unarchive/",
     headers=HEADERS,
     timeout=30,
 )
@@ -1328,7 +1328,7 @@ curl -X POST "$DOKO_URL/api/cases/CASE_UUID/exchanges/" \
     "channel": "email",
     "subject": "Request for information",
     "body": "<p>Please confirm the following points.</p>",
-    "sender": "soc@example.com",
+    "sender": "automation@example.com",
     "to": ["customer@example.com"],
     "cc": ["manager@example.com"],
     "bcc": [],
@@ -1351,7 +1351,7 @@ payload = {
     "channel": "email",
     "subject": "Request for information",
     "body": "<p>Please confirm the following points.</p>",
-    "sender": "soc@example.com",
+    "sender": "automation@example.com",
     "to": ["customer@example.com"],
     "cc": ["manager@example.com"],
     "bcc": [],
@@ -1386,7 +1386,7 @@ curl -X POST "$DOKO_URL/api/cases/CASE_UUID/exchanges/send/" \
     "channel": "email",
     "subject": "Request for information",
     "body": "<p>Please confirm the following points.</p>",
-    "sender": "soc@example.com",
+    "sender": "automation@example.com",
     "to": ["customer@example.com"],
     "cc": [],
     "bcc": [],
@@ -1408,7 +1408,7 @@ payload = {
     "channel": "email",
     "subject": "Request for information",
     "body": "<p>Please confirm the following points.</p>",
-    "sender": "soc@example.com",
+    "sender": "automation@example.com",
     "to": ["customer@example.com"],
     "cc": [],
     "bcc": [],
@@ -1667,10 +1667,10 @@ print(response.json())
 
 ### Delete a case
 
-Deletion is soft deletion.
+Deletion is permanent. Related records are deleted or handled according to their database relationship.
 
 ```bash
-curl -X POST "$DOKO_URL/api/events/CASE_UUID/delete/" \
+curl -X POST "$DOKO_URL/api/cases/CASE_UUID/delete/" \
   -H "Authorization: Token $DOKO_TOKEN"
 ```
 
@@ -1680,12 +1680,12 @@ Python example:
 import requests
 
 response = requests.post(
-    f"{DOKO_URL}/api/events/CASE_UUID/delete/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/delete/",
     headers=HEADERS,
     timeout=30,
 )
 response.raise_for_status()
-print(response.json())
+print(response.status_code)
 ```
 
 _______________________________________________________________________
@@ -2043,6 +2043,29 @@ unarchive = requests.post(
 unarchive.raise_for_status()
 ```
 
+### Delete a hunt
+
+Deletion is permanent. Related records are deleted or handled according to their database relationship.
+
+```bash
+curl -X POST "$DOKO_URL/api/hunts/HUNT_UUID/delete/" \
+  -H "Authorization: Token $DOKO_TOKEN"
+```
+
+Python example:
+
+```python
+import requests
+
+response = requests.post(
+    f"{DOKO_URL}/api/hunts/HUNT_UUID/delete/",
+    headers=HEADERS,
+    timeout=30,
+)
+response.raise_for_status()
+print(response.status_code)
+```
+
 _______________________________________________________________________
 
 ## Tasks
@@ -2306,7 +2329,7 @@ response.raise_for_status()
 
 ### Delete a task
 
-Deletion is soft deletion.
+Deletion is permanent. Related records are deleted or handled according to their database relationship.
 
 ```bash
 curl -X DELETE "$DOKO_URL/api/tasks/TASK_UUID/" \
@@ -2567,7 +2590,7 @@ Python example that runs a connector against every IoC already present on a case
 import requests
 
 case_response = requests.get(
-    f"{DOKO_URL}/api/events/CASE_UUID/",
+    f"{DOKO_URL}/api/cases/CASE_UUID/",
     headers=HEADERS,
     timeout=30,
 )
@@ -2761,7 +2784,7 @@ curl -X POST "http://YOUR_DOKO/api/chat/sessions/CHAT_SESSION_UUID/runs" \
   -H "Authorization: Token YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Summarize this case. Focus on the incident timeline, IoCs, assets, current status, and recommended next steps.",
+    "message": "Summarize this case. Focus on the incident timeline, IoCs, assets, current status, and recommended next steps.",
     "client_tab_id": "script-case-analysis",
     "request_id": "case-summary-001",
     "page_type": "case",
@@ -2808,7 +2831,7 @@ headers = {
 }
 
 payload = {
-    "prompt": "Summarize this case. Focus on the incident timeline, IoCs, assets, current status, and recommended next steps.",
+    "message": "Summarize this case. Focus on the incident timeline, IoCs, assets, current status, and recommended next steps.",
     "client_tab_id": "script-case-analysis",
     "request_id": "case-summary-001",
     "page_type": "case",
@@ -3006,7 +3029,7 @@ session_response.raise_for_status()
 session_id = session_response.json()["id"]
 
 run_payload = {
-    "prompt": "Summarize this case for the activity comments. Include current status, key facts, relevant IoCs and assets, and recommended next steps.",
+    "message": "Summarize this case for the activity comments. Include current status, key facts, relevant IoCs and assets, and recommended next steps.",
     "client_tab_id": client_tab_id,
     "request_id": f"case-summary-{uuid.uuid4()}",
     "page_type": "case",
@@ -3062,7 +3085,7 @@ curl -X POST "http://YOUR_DOKO/api/chat/sessions/CHAT_SESSION_UUID/runs" \
   -H "Authorization: Token YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Analyze this case. Identify suspicious indicators, affected assets, possible attack path, missing information, and recommended containment actions. Return a structured analysis suitable for a case comment.",
+    "message": "Analyze this case. Identify suspicious indicators, affected assets, possible attack path, missing information, and recommended containment actions. Return a structured analysis suitable for a case comment.",
     "client_tab_id": "script-case-analysis",
     "request_id": "case-analysis-001",
     "page_type": "case",
@@ -3076,7 +3099,7 @@ curl -X POST "http://YOUR_DOKO/api/chat/sessions/CHAT_SESSION_UUID/runs" \
 
 ```python
 payload = {
-    "prompt": "Analyze this case. Identify suspicious indicators, affected assets, possible attack path, missing information, and recommended containment actions. Return a structured analysis suitable for a case comment.",
+    "message": "Analyze this case. Identify suspicious indicators, affected assets, possible attack path, missing information, and recommended containment actions. Return a structured analysis suitable for a case comment.",
     "client_tab_id": "script-case-analysis",
     "request_id": "case-analysis-001",
     "page_type": "case",
@@ -3111,7 +3134,7 @@ curl -X POST "http://YOUR_DOKO/api/chat/sessions/CHAT_SESSION_UUID/runs" \
   -H "Authorization: Token YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Summarize this alert. Include severity, classification, source, IoCs, assets, and recommended triage decision.",
+    "message": "Summarize this alert. Include severity, classification, source, IoCs, assets, and recommended triage decision.",
     "client_tab_id": "script-alert-summary",
     "request_id": "alert-summary-001",
     "page_type": "alert",
@@ -3154,7 +3177,7 @@ curl -X POST "http://YOUR_DOKO/api/chat/sessions/CHAT_SESSION_UUID/runs" \
   -H "Authorization: Token YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "Summarize this hunt. Include objective, context, timeline, indicators, assets, verdict, and remaining actions.",
+    "message": "Summarize this hunt. Include objective, context, timeline, indicators, assets, verdict, and remaining actions.",
     "client_tab_id": "script-hunt-summary",
     "request_id": "hunt-summary-001",
     "page_type": "hunt",
@@ -3230,7 +3253,7 @@ curl -X POST "http://YOUR_DOKO/api/chat/sessions/CHAT_SESSION_UUID/runs" \
   -H "Authorization: Token YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "prompt": "/INVESTIGATION_COMMAND 203.0.113.10",
+    "message": "/INVESTIGATION_COMMAND 203.0.113.10",
     "client_tab_id": "script-investigation-command",
     "request_id": "investigation-command-001",
     "page_type": "case",
@@ -3258,7 +3281,7 @@ headers = {
 }
 
 payload = {
-    "prompt": f"{COMMAND} {VALUE}",
+    "message": f"{COMMAND} {VALUE}",
     "client_tab_id": "script-investigation-command",
     "request_id": "investigation-command-001",
     "page_type": "case",
@@ -3319,7 +3342,7 @@ session_id = session_response.json()["id"]
 for ioc in IOCS:
     value = ioc["value"]
     run_payload = {
-        "prompt": f"{COMMAND} {value}",
+        "message": f"{COMMAND} {value}",
         "client_tab_id": client_tab_id,
         "request_id": f"ioc-{value}-{uuid.uuid4()}",
         "page_type": "case",
@@ -3407,7 +3430,7 @@ session_id = session_response.json()["id"]
 for asset in ASSETS:
     value = asset["value"]
     run_payload = {
-        "prompt": f"{COMMAND} {value}",
+        "message": f"{COMMAND} {value}",
         "client_tab_id": client_tab_id,
         "request_id": f"asset-{value}-{uuid.uuid4()}",
         "page_type": "case",
@@ -3496,7 +3519,7 @@ results = []
 
 for value in VALUES:
     run_payload = {
-        "prompt": f"{COMMAND} {value}",
+        "message": f"{COMMAND} {value}",
         "client_tab_id": client_tab_id,
         "request_id": f"bulk-{value}-{uuid.uuid4()}",
         "page_type": "case",
@@ -3545,7 +3568,7 @@ comment_payload = {
     "text": "\n".join(blocks),
 }
 
-comment_response = requests.post(f"{DOKO_URL}/api/events/{CASE_ID}/comments/", headers=headers_json, json=comment_payload, timeout=30)
+comment_response = requests.post(f"{DOKO_URL}/api/cases/{CASE_ID}/comments/", headers=headers_json, json=comment_payload, timeout=30)
 comment_response.raise_for_status()
 print(comment_response.json())
 ```

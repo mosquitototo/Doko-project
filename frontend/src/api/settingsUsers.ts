@@ -6,7 +6,7 @@ export type SettingsUser = {
   username: string;
   email: string;
   is_active: boolean;
-  is_staff: boolean;
+  is_admin: boolean;
   role_ids?: number[];
 };
 
@@ -98,10 +98,10 @@ export async function confirmPasswordReset(payload: {
   });
 }
 
-export async function disableSettingsUser(userId: number): Promise<void> {
+export async function deleteSettingsUser(userId: number): Promise<void> {
   const csrfToken = await ensureCsrf();
   await api.post(
-    `/api/settings/users/${userId}/disable/`,
+    `/api/settings/users/${userId}/delete/`,
     {},
     {
       headers: {
@@ -117,7 +117,7 @@ export async function updateUser(
     username?: string;
     email?: string;
     is_active?: boolean;
-    is_staff?: boolean;
+    is_admin?: boolean;
     role_ids?: number[];
   }
 ) {

@@ -14,7 +14,7 @@ export default function RequireAnyPerm({
     return <Navigate to="/login" replace />;
   }
 
-  const ok = me.is_staff || any.some((p) => me.permissions?.includes(p));
+  const ok = me.is_admin || any.some((p) => me.permissions?.includes(p));
 
   if (!ok) {
     return <Navigate to="/" replace />;

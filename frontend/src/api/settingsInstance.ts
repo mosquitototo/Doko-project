@@ -22,6 +22,14 @@ export type InstanceSettingsPayload = {
     source: string;
     sourcetype: string;
   };
+  syslog?: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    protocol: "udp" | "tcp" | "tcp_tls";
+    format: "rfc5424" | "rfc3164" | "cef";
+    has_ca_certificate?: boolean;
+  };
   last_backup?: BackupInfo | null;
   last_backup_file?: string;
   last_audit_export_file?: string;
@@ -151,6 +159,31 @@ export async function testSplunkHecConnection(payload: {
     headers: {
       "X-CSRFToken": csrfToken,
     },
+  });
+  return data as { ok: boolean; detail: string };
+}
+
+export type SyslogSettingsPayload = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  protocol: "udp" | "tcp" | "tcp_tls";
+  format: "rfc5424" | "rfc3164" | "cef";
+  ca_certificate?: string;
+};
+
+export async function saveSyslogSettings(payload: SyslogSettingsPayload) {
+  const csrfToken = await ensureCsrf();
+  const { data } = await api.put("/api/settings/instance/syslog/", payload, {
+    headers: { "X-CSRFToken": csrfToken },
+  });
+  return data as InstanceSettingsPayload["syslog"];
+}
+
+export async function testSyslogConnection(payload: SyslogSettingsPayload) {
+  const csrfToken = await ensureCsrf();
+  const { data } = await api.post("/api/settings/instance/syslog/test/", payload, {
+    headers: { "X-CSRFToken": csrfToken },
   });
   return data as { ok: boolean; detail: string };
 }

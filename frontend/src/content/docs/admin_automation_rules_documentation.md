@@ -853,7 +853,7 @@ Severity EQUAL critical
 
 ---
 
-### Example: assign new high severity cases to an analyst
+### Example: assign new high severity cases to a user
 
 #### Rule settings
 
@@ -875,7 +875,7 @@ Severity EQUAL high
 #### Action
 
 - Type : `Change owner`
-- New value : selected analyst
+- New value : selected user
 
 ---
 

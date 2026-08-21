@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.db import transaction
 
-from core.models import Event, CaseRetentionSettings
+from core.models import Case, CaseRetentionSettings
 
 class Command(BaseCommand):
     help = "Apply case retention policy: auto-archive then hard delete archived cases after expiration."
@@ -18,13 +18,13 @@ class Command(BaseCommand):
         archive_cutoff = now - timezone.timedelta(days=settings.auto_archive_after_days)
         delete_cutoff = now - timezone.timedelta(days=settings.hard_delete_after_days)
 
-        to_archive = Event.objects.filter(
+        to_archive = Case.objects.filter(
             archived_at__isnull=True,
             is_deleted=False,
             created_at__lt=archive_cutoff,
         )
 
-        to_delete = Event.objects.filter(
+        to_delete = Case.objects.filter(
             archived_at__isnull=False,
             archived_at__lt=delete_cutoff,
         )

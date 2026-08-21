@@ -228,7 +228,7 @@ export default function SettingsCustomers() {
   const { push } = useToast();
 
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView =
     can("settings.customers.view") || can("settings.customers.manage");
   const canManage = can("settings.customers.manage");

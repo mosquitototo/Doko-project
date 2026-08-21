@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from .models import Alert, Customer, DashboardPreference, Event, Hunt
+from .models import Alert, Customer, DashboardPreference, Case, Hunt
 from .rbac import get_accessible_customer_ids, user_has_perm
 
 
@@ -79,14 +79,14 @@ QUALIFIED_ALERT_OUTCOMES = [
     Alert.Outcome.LEGIT,
 ]
 
-FP_CASE_OUTCOMES = [Event.Outcome.FP, Event.Outcome.FPT]
-TP_CASE_OUTCOMES = [Event.Outcome.TPWI, Event.Outcome.TPWOI]
+FP_CASE_OUTCOMES = [Case.Outcome.FP, Case.Outcome.FPT]
+TP_CASE_OUTCOMES = [Case.Outcome.TPWI, Case.Outcome.TPWOI]
 QUALIFIED_CASE_OUTCOMES = [
-    Event.Outcome.TPWI,
-    Event.Outcome.TPWOI,
-    Event.Outcome.FPT,
-    Event.Outcome.FP,
-    Event.Outcome.LEGIT,
+    Case.Outcome.TPWI,
+    Case.Outcome.TPWOI,
+    Case.Outcome.FPT,
+    Case.Outcome.FP,
+    Case.Outcome.LEGIT,
 ]
 
 
@@ -172,7 +172,7 @@ def _build_dashboard_querysets(user, customer_id: str | None = None):
         if requested_customer_id not in accessible:
             raise PermissionDenied("Customer not accessible.")
 
-    events = Event.objects.filter(is_deleted=False)
+    events = Case.objects.filter(is_deleted=False)
     alerts = Alert.objects.filter(is_deleted=False)
     hunts = Hunt.objects.filter(is_deleted=False)
 
@@ -440,7 +440,7 @@ def dashboard(request):
     start = scope["start"]
     end = scope["end"]
 
-    open_case_statuses = [Event.Status.OPEN, Event.Status.IN_PROGRESS, Event.Status.RESOLVED]
+    open_case_statuses = [Case.Status.OPEN, Case.Status.IN_PROGRESS, Case.Status.RESOLVED]
     open_alert_statuses = [Alert.Status.OPEN, Alert.Status.IN_PROGRESS]
     open_hunt_statuses = [Hunt.Status.TO_DO, Hunt.Status.IN_PROGRESS]
 
@@ -448,7 +448,7 @@ def dashboard(request):
     alerts_created_period = _apply_dt_range(alerts, "created_at", start, end)
 
     events_closed_period = _apply_dt_range(
-        events.filter(status=Event.Status.CLOSED),
+        events.filter(status=Case.Status.CLOSED),
         "updated_at",
         start,
         end,
@@ -466,7 +466,7 @@ def dashboard(request):
         end,
     )
     tpwi_cases_period = _apply_dt_range(
-        events.filter(outcome=Event.Outcome.TPWI),
+        events.filter(outcome=Case.Outcome.TPWI),
         "updated_at",
         start,
         end,

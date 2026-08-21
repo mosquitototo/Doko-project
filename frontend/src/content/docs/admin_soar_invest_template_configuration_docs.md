@@ -110,7 +110,7 @@ Use it to define global assistant behavior.
 Example:
 
 ```text
-You are a SOC assistant. Answer clearly, stay factual, and avoid exposing sensitive information unless it is required for the investigation.
+You are a Doko assistant. Answer clearly, stay factual, and use only the information required for the current request.
 ```
 
 Recommendations:

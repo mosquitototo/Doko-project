@@ -22,7 +22,7 @@ from .models import (
     Classification,
     Comment,
     Customer,
-    Event,
+    Case,
     Hunt,
     HuntJournalEntry,
     InvestigationTemplate,
@@ -375,7 +375,7 @@ def _target_owner_id(target: Any) -> str:
 
 
 def _case_alert_sources(target: Any) -> list[str]:
-    if not isinstance(target, Event):
+    if not isinstance(target, Case):
         return []
 
     sources = []
@@ -405,7 +405,7 @@ def _case_alert_sources(target: Any) -> list[str]:
 
 
 def _target_source(target: Any):
-    if isinstance(target, Event):
+    if isinstance(target, Case):
         return _case_alert_sources(target)
 
     return str(getattr(target, "source", "") or "").strip()
@@ -421,7 +421,7 @@ def _target_source_text(target: Any) -> str:
 
 
 def _linked_alert_count(target: Any) -> int:
-    if isinstance(target, Event):
+    if isinstance(target, Case):
         return Alert.objects.filter(case=target, is_deleted=False).count()
     return 0
 
@@ -436,7 +436,7 @@ def _object_age_hours(target: Any) -> int:
 
 
 def _inbound_exchange_delay_minutes(target: Any) -> int:
-    if not isinstance(target, Event):
+    if not isinstance(target, Case):
         return 0
 
     last_inbound = (
@@ -671,7 +671,7 @@ def _target_payload(target: Any) -> dict:
         "severity": getattr(target, "severity", "") or "",
         "classification": getattr(target, "classification", "") or "",
         "source": _target_source_text(target),
-        "sources": _target_source(target) if isinstance(target, Event) else [],
+        "sources": _target_source(target) if isinstance(target, Case) else [],
         "customer_id": _target_customer_id(target) or None,
         "owner_id": _target_owner_id(target) or None,
     }
@@ -700,15 +700,15 @@ def _runtime_variables(ctx: AutomationContext, extra: dict | None = None) -> dic
         "target.severity": getattr(ctx.target, "severity", "") or "",
         "target.classification": getattr(ctx.target, "classification", "") or "",
         "target.source": _target_source_text(ctx.target),
-        "target.sources": _target_source(ctx.target) if isinstance(ctx.target, Event) else [],
+        "target.sources": _target_source(ctx.target) if isinstance(ctx.target, Case) else [],
         "target.customer_id": _target_customer_id(ctx.target),
         "target.owner_id": _target_owner_id(ctx.target),
 
-        "case.id": ctx.target_id if isinstance(ctx.target, Event) else "",
-        "case.title": getattr(ctx.target, "title", "") if isinstance(ctx.target, Event) else "",
-        "case.description": _target_description(ctx.target) if isinstance(ctx.target, Event) else "",
-        "case.source": _target_source_text(ctx.target) if isinstance(ctx.target, Event) else "",
-        "case.sources": _target_source(ctx.target) if isinstance(ctx.target, Event) else [],
+        "case.id": ctx.target_id if isinstance(ctx.target, Case) else "",
+        "case.title": getattr(ctx.target, "title", "") if isinstance(ctx.target, Case) else "",
+        "case.description": _target_description(ctx.target) if isinstance(ctx.target, Case) else "",
+        "case.source": _target_source_text(ctx.target) if isinstance(ctx.target, Case) else "",
+        "case.sources": _target_source(ctx.target) if isinstance(ctx.target, Case) else [],
 
         "alert.id": ctx.target_id if isinstance(ctx.target, Alert) else "",
         "alert.title": getattr(ctx.target, "title", "") if isinstance(ctx.target, Alert) else "",
@@ -769,9 +769,9 @@ def _render_mapping(value, ctx: AutomationContext, extra: dict | None = None):
     return value
 
 
-def _create_timeline(case: Event, text: str, item_type: str = "automation_action"):
+def _create_timeline(case: Case, text: str, item_type: str = "automation_action"):
     TimelineItem.objects.create(
-        event=case,
+        case=case,
         date=timezone.now().date(),
         type=item_type,
         text=text,
@@ -779,8 +779,8 @@ def _create_timeline(case: Event, text: str, item_type: str = "automation_action
     )
 
 
-def _get_case_for_action(ctx: AutomationContext) -> Event | None:
-    if isinstance(ctx.target, Event):
+def _get_case_for_action(ctx: AutomationContext) -> Case | None:
+    if isinstance(ctx.target, Case):
         return ctx.target
 
     if isinstance(ctx.target, Alert) and ctx.target.case_id:
@@ -803,7 +803,7 @@ def _add_comment(ctx: AutomationContext, action: dict) -> dict:
             raise ValueError("Case not found")
 
         comment = Comment.objects.create(
-            event=case,
+            case=case,
             author=None,
             author_label=SYSTEM_AUTHOR_LABEL,
             text=body,
@@ -904,7 +904,7 @@ def _automation_action_index(action: dict) -> int | None:
 
 def _automation_exchange_exists(
     *,
-    case: Event,
+    case: Case,
     ctx: AutomationContext,
     action: dict,
     source: CaseExchange | None,
@@ -929,7 +929,7 @@ def _automation_exchange_exists(
 
 def _create_exchange_from_source(
     *,
-    case: Event,
+    case: Case,
     source: CaseExchange | None,
     action: dict,
     ctx: AutomationContext,
@@ -1156,8 +1156,20 @@ def _validate_change_field_value(ctx: AutomationContext, field: str, value):
         return str(value)
 
     if field == "classification":
+        if isinstance(ctx.target, Hunt):
+            raise ValueError("Classification is not available for this scope")
+
         if not Classification.objects.filter(code=str(value), is_active=True).exists():
             raise ValueError("Unknown or inactive classification")
+        return str(value)
+
+    if field == "status":
+        choices = {
+            str(choice)
+            for choice, _label in ctx.target._meta.get_field("status").choices
+        }
+        if str(value) not in choices:
+            raise ValueError("Invalid status for this scope")
         return str(value)
 
     return value
@@ -1657,7 +1669,7 @@ def _apply_workbook_template(ctx: AutomationContext, action: dict) -> dict:
         raise ValueError("Unknown or inactive workbook template")
 
     instance, _ = WorkbookInstance.objects.get_or_create(
-        event=case,
+        case=case,
         defaults={"template": template},
     )
 
@@ -2338,7 +2350,7 @@ def _run_investigation_template(ctx: AutomationContext, action: dict) -> dict:
                 author_label = SYSTEM_AUTHOR_LABEL
 
             Comment.objects.create(
-                event=case,
+                case=case,
                 author=None,
                 author_label=author_label,
                 text=text,
@@ -2676,7 +2688,7 @@ def run_scheduled_automation_rules() -> dict:
             continue
 
         if scope == "case":
-            qs = Event.objects.filter(
+            qs = Case.objects.filter(
                 is_deleted=False,
                 archived_at__isnull=True,
             ).order_by("-updated_at", "-created_at")[:500]

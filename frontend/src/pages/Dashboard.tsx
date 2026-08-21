@@ -211,7 +211,12 @@ function PieCard({
       ) : (
         <div className="grid items-center gap-5 xl:grid-cols-[minmax(0,220px)_1fr]">
           <div className="h-[220px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer
+              width="100%"
+              height="100%"
+              minWidth={0}
+              initialDimension={{ width: 1, height: 1 }}
+            >
               <PieChart>
                 <Pie
                   data={data}
@@ -344,7 +349,12 @@ function FullWidthBarCases({
         <div className="py-8 text-sm text-muted-foreground">No data.</div>
       ) : (
         <div className="h-[220px] w-full">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer
+            width="100%"
+            height="100%"
+            minWidth={0}
+            initialDimension={{ width: 1, height: 1 }}
+          >
             <BarChart data={data} barCategoryGap="28%">
               <XAxis
                 dataKey="date"
@@ -423,7 +433,12 @@ function FullWidthBarAlerts({
         <div className="py-8 text-sm text-muted-foreground">No data.</div>
       ) : (
         <div className="h-[220px] w-full">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer
+            width="100%"
+            height="100%"
+            minWidth={0}
+            initialDimension={{ width: 1, height: 1 }}
+          >
             <BarChart data={data} barCategoryGap="35%">
               <XAxis
                 dataKey="date"
@@ -1372,7 +1387,7 @@ export default function Dashboard() {
             Dashboard
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Indicators across your SOC activity window.
+            Indicators across your selected activity window.
           </div>
         </div>
 

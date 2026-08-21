@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Search, X } from "../../components/ui/IconButton";
 
 
@@ -18,6 +19,7 @@ type Props = {
   disabled?: boolean;
   widthClass?: string;
   maxPreviewItems?: number;
+  portal?: boolean;
 };
 
 function FilterLabel({ children }: { children: React.ReactNode }) {
@@ -39,18 +41,32 @@ export default function MultiSelectCombobox({
   disabled = false,
   widthClass = "w-full",
   maxPreviewItems = 2,
+  portal = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [portalPosition, setPortalPosition] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+    width: number;
+  } | null>(null);
 
   useEffect(() => {
     const onDocMouseDown = (e: MouseEvent) => {
       if (!open) return;
       const el = rootRef.current;
       if (!el) return;
-      if (e.target instanceof Node && !el.contains(e.target)) {
+      const dropdown = dropdownRef.current;
+      if (
+        e.target instanceof Node &&
+        !el.contains(e.target) &&
+        !dropdown?.contains(e.target)
+      ) {
         setOpen(false);
       }
     };
@@ -58,6 +74,36 @@ export default function MultiSelectCombobox({
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !portal) {
+      setPortalPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const placeAbove = spaceBelow < 360 && rect.top > spaceBelow;
+      setPortalPosition({
+        left: rect.left,
+        width: rect.width,
+        ...(placeAbove
+          ? { bottom: window.innerHeight - rect.top + 8 }
+          : { top: rect.bottom + 8 }),
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [open, portal]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -126,11 +172,109 @@ export default function MultiSelectCombobox({
     onChange(options.map((o) => o.value));
   }
 
+  const dropdown = (
+    <div
+      ref={dropdownRef}
+      className={
+        portal
+          ? "fixed z-[130] overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_50px_rgba(2,6,23,0.18)]"
+          : "absolute left-0 z-[120] mt-2 w-full max-w-full overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_50px_rgba(2,6,23,0.18)]"
+      }
+      style={portal && portalPosition ? portalPosition : undefined}
+    >
+      <div className="border-b border-border bg-card p-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={searchPlaceholder ?? `Search ${label.toLowerCase()}...`}
+            className="h-9 w-full rounded-xl border border-border bg-background pl-9 pr-8 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+              aria-label="Clear search"
+              title="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
+
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <button
+            type="button"
+            className="rounded-lg px-2.5 py-1 text-[11px] border-none cursor-pointer bg-transparent font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+            onClick={clearAll}
+          >
+            Clear
+          </button>
+
+          <button
+            type="button"
+            className="rounded-lg px-2.5 py-1 text-[11px] border-none cursor-pointer bg-transparent font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+            onClick={() => {
+              if (allSelected) clearAll();
+              else selectAll();
+            }}
+          >
+            {allSelected ? "Unselect all" : "Select all"}
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-64 overflow-y-auto overflow-x-hidden p-2">
+        {filteredOptions.length === 0 ? (
+          <div className="rounded-xl px-3 py-3 text-sm text-muted-foreground">
+            {emptyMessage}
+          </div>
+        ) : (
+          <div className="space-y-1">
+            {filteredOptions.map((option) => {
+              const checked = selectedSet.has(option.value);
+
+              return (
+                <label
+                  key={option.value}
+                  className="flex min-h-9 cursor-pointer select-none items-center gap-3 rounded-xl px-3 py-2 transition hover:bg-accent/60"
+                >
+                  <div className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 cursor-pointer rounded border-border"
+                      checked={checked}
+                      onChange={() => toggleValue(option.value)}
+                    />
+                    {checked ? (
+                      <Check className="pointer-events-none absolute h-3.5 w-3.5 text-foreground" />
+                    ) : null}
+                  </div>
+
+                  <span
+                    className="truncate text-sm text-foreground"
+                    title={option.label}
+                  >
+                    {option.label}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
     <div className={`${widthClass} min-w-0`} ref={rootRef}>
       <FilterLabel>{label}</FilterLabel>
 
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
@@ -163,98 +307,13 @@ export default function MultiSelectCombobox({
         </div>
       </button>
 
-      {open && !disabled ? (
-        <div className="relative">
-          <div className="absolute left-0 z-[120] mt-2 w-full max-w-full overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_50px_rgba(2,6,23,0.18)]">
-            <div className="border-b border-border bg-card p-2">
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  ref={inputRef}
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={
-                    searchPlaceholder ?? `Search ${label.toLowerCase()}...`
-                  }
-                  className="h-9 w-full rounded-xl border border-border bg-background pl-9 pr-8 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20"
-                />
-                {query ? (
-                  <button
-                    type="button"
-                    onClick={() => setQuery("")}
-                    className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
-                    aria-label="Clear search"
-                    title="Clear search"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                ) : null}
-              </div>
-
-              <div className="mt-3 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  className="rounded-lg px-2.5 py-1 text-[11px] border-none cursor-pointer bg-transparent font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
-                  onClick={clearAll}
-                >
-                  Clear
-                </button>
-
-                <button
-                  type="button"
-                  className="rounded-lg px-2.5 py-1 text-[11px] border-none cursor-pointer bg-transparent font-medium text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
-                  onClick={() => {
-                    if (allSelected) clearAll();
-                    else selectAll();
-                  }}
-                >
-                  {allSelected ? "Unselect all" : "Select all"}
-                </button>
-              </div>
-            </div>
-
-            <div className="max-h-64 overflow-y-auto overflow-x-hidden p-2">
-              {filteredOptions.length === 0 ? (
-                <div className="rounded-xl px-3 py-3 text-sm text-muted-foreground">
-                  {emptyMessage}
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {filteredOptions.map((option) => {
-                    const checked = selectedSet.has(option.value);
-
-                    return (
-                      <label
-                        key={option.value}
-                        className="flex min-h-9 cursor-pointer select-none items-center gap-3 rounded-xl px-3 py-2 transition hover:bg-accent/60"
-                      >
-                        <div className="relative flex h-4 w-4 shrink-0 items-center justify-center">
-                          <input
-                            type="checkbox"
-                            className="h-4 w-4 cursor-pointer rounded border-border"
-                            checked={checked}
-                            onChange={() => toggleValue(option.value)}
-                          />
-                          {checked ? (
-                            <Check className="pointer-events-none absolute h-3.5 w-3.5 text-foreground" />
-                          ) : null}
-                        </div>
-
-                        <span
-                          className="truncate text-sm text-foreground"
-                          title={option.label}
-                        >
-                          {option.label}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {open && !disabled
+        ? portal
+          ? portalPosition
+            ? createPortal(dropdown, document.body)
+            : null
+          : <div className="relative">{dropdown}</div>
+        : null}
     </div>
   );
 }

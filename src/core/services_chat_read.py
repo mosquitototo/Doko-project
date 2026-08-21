@@ -14,6 +14,7 @@ from .services_chat_query import (
     sanitize_chat_query_plan,
 )
 from .services_llm import LLMService
+from .rbac import user_has_perm
 
 
 ALLOWED_OPERATIONS = frozenset({
@@ -293,6 +294,18 @@ def execute_chat_read_operation(
     if operation == "none":
         return None
 
+    permission_map = {
+        "case": ("chat.read.case", "case.view"),
+        "alert": ("chat.read.alert", "alert.view"),
+        "hunt": ("chat.read.hunt", "hunt.view"),
+    }
+
+    def allowed(resource):
+        required = permission_map.get(resource)
+        return bool(required) and all(
+            user_has_perm(user, code, customer_id=customer_id) for code in required
+        )
+
     if operation == "search":
         payload = build_unified_search_results(
             user=user,
@@ -311,6 +324,17 @@ def execute_chat_read_operation(
             list(payload.get("results", [])),
             resource,
         )
+        results = [
+            item
+            for item in results
+            if allowed(
+                "case"
+                if item.get("type") in {"case", "case_comment", "ioc", "asset"}
+                else "alert"
+                if item.get("type") in {"alert", "alert_comment"}
+                else "hunt"
+            )
+        ]
 
         limit = int(plan.get("limit") or 10)
         limited_results = results[:limit]
@@ -331,6 +355,8 @@ def execute_chat_read_operation(
         }
 
     if operation == "query":
+        if not allowed(plan.get("resource")):
+            raise ValidationError("This resource is not available to the chatbot.")
         return execute_chat_query(
             user=user,
             plan=plan,

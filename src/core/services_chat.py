@@ -31,6 +31,8 @@ from .services_chat_read import (
     plan_chat_read_operation,
 )
 from .services_llm import LLMService
+from .audit import sanitize_audit_metadata
+from .rbac import user_has_perm
 from .services_soar import (
     collect_soar_result,
     launch_soar_execution,
@@ -44,7 +46,7 @@ SLASH_RE = re.compile(r"^/(?P<command>[a-z0-9_:-]+)(?:\s+(?P<rest>.*))?$", re.IG
 ARG_RE = re.compile(r'(?P<key>[a-zA-Z_][a-zA-Z0-9_]*)=(?P<value>"[^"]*"|\S+)')
 
 BASE_SYSTEM_PROMPT = (
-    "You are Doko's SOC analyst assistant, expert on cybersecurity. "
+    "You are Doko's cybersecurity investigation assistant. "
     "Answer the user's question directly and naturally based only on the provided case, alert, hunt, task, dashboard or audit context and the conversation history provided with the request. "
     "Use the prior conversation to preserve continuity when the user's new message depends on earlier exchanges. "
     "If the user sends a short referential follow-up such as '+2', 'continue', 'summarize that', 'rewrite it', or similar, interpret it using the most recent relevant exchange. "
@@ -140,8 +142,8 @@ def _audit_soar_investigation_event(
             status_code=200 if success else 500,
             object_type="chat_action_run",
             object_id=str(action.id),
-            object_repr=template.name or template.code or "",
-            metadata={
+            object_repr="",
+            metadata=sanitize_audit_metadata({
                 "run_id": str(run.id),
                 "request_id": run.request_id or "",
                 "session_id": str(run.session_id) if run.session_id else "",
@@ -167,7 +169,7 @@ def _audit_soar_investigation_event(
                 "remote_run_id": action.remote_run_id or "",
                 "remote_status": action.remote_status or "",
                 "error": str(error or "")[:2000],
-            },
+            }),
         )
     except Exception:
         pass
@@ -356,7 +358,7 @@ def _build_template_selection_prompt(run: ChatRun, templates: list[Investigation
     )
 
     lines = [
-        "You are selecting at most one investigation template for a SOC chatbot request.",
+        "You are selecting at most one investigation template for a Doko chatbot request.",
         "Return JSON only.",
         'If no template should be executed, return: {"should_execute": false}.',
         'If one template should be executed, return:',
@@ -681,7 +683,12 @@ def _resolve_action_state(template: InvestigationTemplate, remote_status: str) -
 
 def _wait_for_action_completion(run: ChatRun, action: ChatActionRun) -> ChatActionRun:
     execution_config = action.template.execution_config or {}
+    configured_mode = str(action.template.execution_mode or "provider_default").strip().lower()
     mode = str(execution_config.get("mode") or "").strip().lower()
+    if configured_mode == "async":
+        mode = "async_poll"
+    elif configured_mode == "sync":
+        mode = "sync"
 
     if mode != "async_poll":
         return action
@@ -720,6 +727,12 @@ def _wait_for_action_completion(run: ChatRun, action: ChatActionRun) -> ChatActi
             "cancelled",
         }:
             break
+
+    if action.status == "running" and timezone.now() >= deadline:
+        action.status = "failed"
+        action.error_message = "SOAR execution timed out."
+        action.completed_at = timezone.now()
+        action.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
 
     return action
 
@@ -807,7 +820,7 @@ def _execute_investigation_template(
 
     except Exception as exc:
         action.status = "failed"
-        action.error_message = str(exc)
+        action.error_message = "SOAR investigation failed."
         action.completed_at = timezone.now()
         action.save(
             update_fields=[
@@ -823,7 +836,7 @@ def _execute_investigation_template(
             template=template,
             action=action,
             success=False,
-            error=str(exc),
+            error=type(exc).__name__,
         )
 
         raise
@@ -1149,9 +1162,18 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
 
         explicit_command_missed = bool(explicit_template_code or explicit_chat_command)
 
-        if template is None and explicit_command_missed:
+        customer_id = (getattr(run.session, "customer_id", "") or "").strip() or None
+        can_use_soar = user_has_perm(run.user, "chat.soar.use", customer_id=customer_id)
+        natural_template_selection = template is None and not explicit_command_missed and can_use_soar
+
+        if template is None and (explicit_command_missed or natural_template_selection):
             _set_run_progress(run, label="Checking available SOAR actions…")
             template, llm_selected_variables, template_reason = _select_investigation_template_with_llm(run)
+
+        if natural_template_selection and template is not None and template.risk_level == "high":
+            template = None
+            llm_selected_variables = {}
+            template_reason = "High-risk actions require an explicit command or template selection."
 
         if template is not None and (run.prompt or "").strip():
             pre_inference_variables = {
@@ -1170,8 +1192,8 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
                         template,
                         run.prompt,
                     )
-                except Exception as exc:
-                    print("DOKO_TEMPLATE_VARIABLE_INFERENCE_FAILED:", exc)
+                except Exception:
+                    logger.warning("SOAR template variable inference failed", exc_info=False)
                     llm_inferred_prompt_variables = {}
 
         run = _refresh_run_or_raise_cancelled(run)
@@ -1412,7 +1434,7 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
 
     except Exception as exc:
         run.status = "failed"
-        run.error_message = str(exc)
+        run.error_message = "Chat processing failed."
         run.completed_at = timezone.now()
         run.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
         return run

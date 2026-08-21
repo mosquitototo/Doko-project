@@ -7,7 +7,7 @@ import OutcomeBadge from "../../ui/OutcomeBadge";
 import { Activity, ArchiveButton, CancelButton, DeleteButton, Info, NotebookText, OpenCloseToggleButton, SaveButton, UserRound, Workflow, LeftButton } from "../../ui/IconButton";
 import { generateCaseReport } from "../../../api/caseReports";
 import { updateTicket } from "../../../api/cases";
-import type { EventDetail } from "../../../api/caseDetail";
+import type { CaseDetail } from "../../../api/caseDetail";
 import type { UserLite } from "../../../api/usersLite";
 import type { Customer } from "../../../api/settingsCustomers";
 import type { ClassificationItem, SeverityItem } from "../../../api/dataModels";
@@ -16,7 +16,7 @@ import { formatDate, outcomeOptions, statusOptions } from "./utils";
 type ReportTemplate = { id: string; name: string; is_active: boolean; version: number };
 
 type Props = {
-  event: EventDetail;
+  caseItem: CaseDetail;
   ticketId: string;
   busy: boolean;
   archiveBusy: boolean;
@@ -196,11 +196,11 @@ export default function CaseHeader(props: Props) {
   const navigate = useNavigate();
   const [titleActionsVisible, setTitleActionsVisible] = useState(false);
 
-  const currentTitle = String((props.event as any).title ?? "");
+  const currentTitle = String((props.caseItem as any).title ?? "");
   const nextTitle = props.editTitle.trim();
   const titleDirty = titleActionsVisible && nextTitle !== currentTitle;
-  const caseSources = Array.isArray((props.event as any).case_sources)
-    ? ((props.event as any).case_sources as unknown[])
+  const caseSources = Array.isArray((props.caseItem as any).case_sources)
+    ? ((props.caseItem as any).case_sources as unknown[])
         .map((x) => String(x || "").trim())
         .filter(Boolean)
     : [];
@@ -221,8 +221,8 @@ export default function CaseHeader(props: Props) {
   return (
     <>
       <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Last update {formatDate((props.event as any).updated_at)}</span>
-        <span className="font-mono">Case {props.event.id}</span>
+        <span>Last update {formatDate((props.caseItem as any).updated_at)}</span>
+        <span className="font-mono">Case {props.caseItem.id}</span>
       </div>
 
       <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
@@ -273,15 +273,15 @@ export default function CaseHeader(props: Props) {
 
           <div className="py-2">
             <div className="flex flex-wrap items-center gap-2">
-              {(props.event as any).case_number ? <span className="text-sm font-medium text-muted-foreground">#{(props.event as any).case_number}</span> : null}
+              {(props.caseItem as any).case_number ? <span className="text-sm font-medium text-muted-foreground">#{(props.caseItem as any).case_number}</span> : null}
               <InlineEditableBadge
-                value={String((props.event as any)?.customer || "")}
-                disabled={!props.canUpdateCase || props.busyCaseId === (props.event as any)?.id}
+                value={String((props.caseItem as any)?.customer || "")}
+                disabled={!props.canUpdateCase || props.busyCaseId === (props.caseItem as any)?.id}
                 ariaLabel="Change customer"
                 options={props.customers.filter((c) => c.is_active).sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: String(c.id), label: c.name }))}
                 onChange={async (next) => {
                   const nextCustomerId = next || null;
-                  props.setBusyCaseId((props.event as any).id);
+                  props.setBusyCaseId((props.caseItem as any).id);
                   try {
                     await updateTicket(props.ticketId, { customer: nextCustomerId } as any);
                     props.push({ kind: "success", title: "Customer updated" });
@@ -292,7 +292,7 @@ export default function CaseHeader(props: Props) {
                     props.setBusyCaseId(null);
                   }
                 }}
-                display={<InlineTextBadge>{(props.event as any)?.customer_name || "No customer"}</InlineTextBadge>}
+                display={<InlineTextBadge>{(props.caseItem as any)?.customer_name || "No customer"}</InlineTextBadge>}
               />
             </div>
           </div>
@@ -301,61 +301,61 @@ export default function CaseHeader(props: Props) {
             <div className="flex items-center gap-2">
               <Workflow className="size-4 text-muted-foreground" />
               <InlineEditableBadge
-                value={String((props.event as any).status || "")}
+                value={String((props.caseItem as any).status || "")}
                 onChange={props.changeStatus}
                 disabled={props.busy || !props.canUpdateCase}
                 options={statusOptions}
                 ariaLabel="Change status"
-                display={<StatusBadge status={(props.event as any).status} />}
+                display={<StatusBadge status={(props.caseItem as any).status} />}
               />
             </div>
 
             <div className="flex items-center gap-2">
               <Activity className="size-4 text-muted-foreground" />
               <InlineEditableBadge
-                value={String((props.event as any).severity || "")}
+                value={String((props.caseItem as any).severity || "")}
                 onChange={props.changeSeverity}
                 disabled={props.busy || !props.canUpdateCase}
                 options={props.sevOptions.slice().sort((a, b) => a.order - b.order || a.label.localeCompare(b.label)).map((s) => ({ value: s.code, label: s.label }))}
                 ariaLabel="Change severity"
-                display={<SeverityBadge value={(props.event as any).severity} />}
+                display={<SeverityBadge value={(props.caseItem as any).severity} />}
               />
             </div>
 
             <div className="flex items-center gap-2">
               <NotebookText className="size-4 text-muted-foreground" />
               <InlineEditableBadge
-                value={String((props.event as any).classification || "")}
+                value={String((props.caseItem as any).classification || "")}
                 onChange={props.changeClassification}
                 disabled={props.busy || !props.canUpdateCase}
                 options={props.clsOptions.slice().sort((a, b) => a.label.localeCompare(b.label)).map((c) => ({ value: c.code, label: c.label }))}
                 ariaLabel="Change classification"
-                display={<ClassificationBadge value={(props.event as any).classification} />}
+                display={<ClassificationBadge value={(props.caseItem as any).classification} />}
               />
             </div>
 
             <div className="flex items-center gap-2">
               <Info className="size-4 text-muted-foreground" />
               <InlineEditableBadge
-                value={String((props.event as any).outcome || "unknown")}
+                value={String((props.caseItem as any).outcome || "unknown")}
                 onChange={props.changeOutcome}
                 disabled={props.busy || !props.canUpdateCase}
                 options={outcomeOptions}
                 ariaLabel="Change outcome"
-                display={<OutcomeBadge value={String((props.event as any).outcome || "unknown")} />}
+                display={<OutcomeBadge value={String((props.caseItem as any).outcome || "unknown")} />}
               />
             </div>
 
             <div className="flex items-center gap-2">
               <UserRound className="size-4 text-muted-foreground" />
               <InlineEditableBadge
-                value={String((props.event as any).owner_id_read ?? (props.event as any).owner_id ?? "")}
-                disabled={!props.canUpdateCase || props.busyCaseId === (props.event as any).id}
+                value={String((props.caseItem as any).owner_id_read ?? (props.caseItem as any).owner_id ?? "")}
+                disabled={!props.canUpdateCase || props.busyCaseId === (props.caseItem as any).id}
                 ariaLabel="Change owner"
                 options={props.users.map((u) => ({ value: String(u.id), label: u.username }))}
                 onChange={async (next) => {
                   if (!next) return;
-                  props.setBusyCaseId((props.event as any).id);
+                  props.setBusyCaseId((props.caseItem as any).id);
                   try {
                     await updateTicket(props.ticketId, { owner_id: Number(next) } as any);
                     props.push({ kind: "success", title: "Owner updated" });
@@ -366,7 +366,7 @@ export default function CaseHeader(props: Props) {
                     props.setBusyCaseId(null);
                   }
                 }}
-                display={<InlineTextBadge>{(props.event as any).owner_username || "Unassigned"}</InlineTextBadge>}
+                display={<InlineTextBadge>{(props.caseItem as any).owner_username || "Unassigned"}</InlineTextBadge>}
               />
             </div>
           </div>
@@ -375,13 +375,13 @@ export default function CaseHeader(props: Props) {
         <div className="flex flex-col items-end gap-3">
           <div className="flex items-center gap-2">
             <OpenCloseToggleButton
-              isOpen={(props.event as any).status !== "closed"}
+              isOpen={(props.caseItem as any).status !== "closed"}
               iconOnly
               openTitle="Close case"
               closedTitle="Re-open case"
               onClick={async () => {
                 if (props.busy) return;
-                await props.changeStatus((props.event as any).status === "closed" ? "open" : "closed");
+                await props.changeStatus((props.caseItem as any).status === "closed" ? "open" : "closed");
               }}
               disabled={props.busy || !props.canUpdateCase}
             />

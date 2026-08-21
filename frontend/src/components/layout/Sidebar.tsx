@@ -59,7 +59,7 @@ export default function Sidebar({
   }
   
   const canAny = (ps: string[]) =>
-    !!me?.is_staff ||
+    !!me?.is_admin ||
     !!me?.permissions?.includes("*") ||
     ps.some((p) => me?.permissions?.includes(p));
 
@@ -69,7 +69,7 @@ export default function Sidebar({
   const canHunts = canAny(["hunt.view"]);
   const canChat = canAny(["chat.use"]);
   const canSearch = canAny(["case.view", "alert.view", "hunt.view"]);
-  const canTasks = canAny(["task.view"]);
+  const canTasks = canAny(["task.view", "task.manage"]);
 
   const showUsers = canAny([
     "settings.access.users.view",
@@ -176,7 +176,7 @@ export default function Sidebar({
 
 
   async function refreshTasksAttention() {
-    if (!canAny(["task.view"])) {
+    if (!canAny(["task.view", "task.manage"])) {
       setTasksNeedAttention(false);
       return;
     }
@@ -197,7 +197,7 @@ export default function Sidebar({
 
   useEffect(() => {
     void refreshTasksAttention();
-  }, [me?.is_staff, me?.permissions]);
+  }, [me?.is_admin, me?.permissions]);
 
   useEffect(() => {
     function onTasksChanged() {
@@ -208,7 +208,7 @@ export default function Sidebar({
     return () => {
       window.removeEventListener("doko:tasks-changed", onTasksChanged);
     };
-  }, [me?.is_staff, me?.permissions]);
+  }, [me?.is_admin, me?.permissions]);
 
 
   return (
@@ -227,7 +227,7 @@ export default function Sidebar({
             <div className="text-lg font-semibold tracking-tight text-foreground">
               Doko
             </div>
-            <div className="text-xs text-muted-foreground">SOC workspace</div>
+            <div className="text-xs text-muted-foreground">Investigation workspace</div>
           </div>
         </div>
       </div>
@@ -253,7 +253,7 @@ export default function Sidebar({
               {me?.username || "Anonymous"}
             </div>
             <div className="text-xs text-muted-foreground">
-              {me?.is_staff ? "Administrator" : "Analyst"}
+              {me?.is_admin ? "Administrator" : "User"}
             </div>
           </div>
         </div>

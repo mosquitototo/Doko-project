@@ -8,7 +8,7 @@ from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
 from .models import (
-    Event,
+    Case,
     Alert,
     Hunt,
     TimelineItem,
@@ -40,7 +40,7 @@ def auto_archive_cases() -> dict:
     cutoff = now - timezone.timedelta(days=days)
 
     case_qs = (
-        Event.objects
+        Case.objects
         .filter(is_deleted=False, archived_at__isnull=True)
         .annotate(
             last_activity=Greatest(
@@ -67,14 +67,14 @@ def auto_archive_cases() -> dict:
 
     with transaction.atomic():
         if case_ids:
-            Event.objects.filter(id__in=case_ids, archived_at__isnull=True).update(
+            Case.objects.filter(id__in=case_ids, archived_at__isnull=True).update(
                 archived_at=now,
-                status=Event.Status.ARCHIVED,
+                status=Case.Status.ARCHIVED,
             )
 
             TimelineItem.objects.bulk_create([
                 TimelineItem(
-                    event_id=eid,
+                    case_id=eid,
                     date=now.date(),
                     type="case_archived",
                     text=f"Case auto-archived after {days} day(s)",
@@ -109,13 +109,13 @@ def hard_delete_cases() -> dict:
     cutoff = now - timezone.timedelta(days=days)
 
     case_soft_ids = list(
-        Event.objects
+        Case.objects
         .filter(is_deleted=True, deleted_at__isnull=False, deleted_at__lte=cutoff)
         .values_list("id", flat=True)[:2000]
     )
 
     case_archived_ids = list(
-        Event.objects
+        Case.objects
         .filter(
             is_deleted=False,
             archived_at__lte=cutoff,
@@ -153,8 +153,8 @@ def hard_delete_cases() -> dict:
 
     with transaction.atomic():
         if case_ids:
-            Attachment.objects.filter(event_id__in=case_ids).delete()
-            Event.objects.filter(id__in=case_ids).delete()
+            Attachment.objects.filter(case_id__in=case_ids).delete()
+            Case.objects.filter(id__in=case_ids).delete()
 
         if alert_ids:
             Alert.objects.filter(id__in=alert_ids).delete()
@@ -254,7 +254,7 @@ def _send_followup_if_needed(case, followup, action: str):
     except Exception as exc:
         raw = followup.raw or {}
         raw["send_status"] = "error"
-        raw["send_error"] = str(exc)[:1000]
+        raw["send_error"] = "Exchange delivery failed."
         followup.raw = raw
         followup.save(update_fields=["raw"])
 
@@ -357,7 +357,7 @@ def run_case_auto_followups():
             cfg.save(update_fields=["enabled", "last_triggered_at", "updated_at"])
 
             TimelineItem.objects.create(
-                event=case,
+                case=case,
                 date=now.date(),
                 type="case_exchange_created",
                 text=f"Automatic follow-up created: {(followup.subject or '(no subject)')}",
@@ -368,7 +368,7 @@ def run_case_auto_followups():
         created += 1
 
     cases = (
-        Event.objects
+        Case.objects
         .filter(
             is_deleted=False,
             archived_at__isnull=True,
@@ -444,7 +444,7 @@ def run_case_auto_followups():
         case.save(update_fields=["auto_followup_enabled", "updated_at"])
 
         TimelineItem.objects.create(
-            event=case,
+            case=case,
             date=now.date(),
             type="case_exchange_created",
             text=f"Automatic follow-up created: {(followup.subject or '(no subject)')}",
@@ -479,6 +479,22 @@ def send_audit_log_to_splunk_hec_task(self, audit_log_id: str):
         raise self.retry(exc=exc)
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_audit_log_to_syslog_task(self, audit_log_id: str):
+    audit_log = AuditLog.objects.filter(id=audit_log_id).first()
+
+    if not audit_log:
+        return {"sent": False, "reason": "not_found", "audit_log_id": audit_log_id}
+
+    try:
+        from .services_syslog import send_audit_log_to_syslog
+
+        send_audit_log_to_syslog(audit_log)
+        return {"sent": True, "audit_log_id": audit_log_id}
+    except Exception as exc:
+        raise self.retry(exc=exc)
+
+
 @shared_task
 def run_automation_investigation_template_action_task(
     *,
@@ -490,13 +506,13 @@ def run_automation_investigation_template_action_task(
     data: dict | None = None,
 ):
     from django.contrib.auth import get_user_model
-    from .models import Event, Alert, Hunt, AutomationExecutionLog
+    from .models import Case, Alert, Hunt, AutomationExecutionLog
     from .services_automation import AutomationContext, _run_investigation_template
 
     target = None
 
     if scope == "case":
-        target = Event.objects.filter(id=target_id, is_deleted=False).first()
+        target = Case.objects.filter(id=target_id, is_deleted=False).first()
     elif scope == "alert":
         target = Alert.objects.filter(id=target_id, is_deleted=False).first()
     elif scope == "hunt":

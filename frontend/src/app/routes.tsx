@@ -1,40 +1,41 @@
+import { lazy, type ReactNode } from "react";
 import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
 import Shell from "../components/layout/Shell";
-import Login from "../pages/Login";
-import Dashboard from "../pages/Dashboard";
-import Cases from "../pages/Cases";
-import CaseDetail from "../pages/CaseDetail";
-import CaseNew from "../pages/CaseNew";
-import Alerts from "../pages/Alerts";
-import AlertDetail from "../pages/AlertDetail";
-import SettingsUsers from "../pages/settings/access-control/Users";
-import SettingsRoles from "../pages/settings/access-control/Roles";
-import RoleEdit from "../pages/settings/access-control/RoleEdit";
-import RoleNew from "../pages/settings/access-control/RoleEdit";
-import SettingsDataModels from "../pages/settings/DataModels";
-import SettingsCustomers from "../pages/settings/Customers";
-import SettingsWorkbooks from "../pages/settings/Workbooks";
-import SettingsReports from "../pages/settings/Reports";
-import Connectors from "../pages/settings/Connectors";
-import SettingsCaseManagement from "../pages/settings/CaseManagement";
-import AutomationRuleEdit from "../pages/settings/AutomationRuleEdit";
-import Preferences from "../pages/Preferences";
-import SettingsAudit from "../pages/settings/access-control/Audit";
-import ResetPassword from "../pages/settings/access-control/ResetPassword";
-import HuntsPage from "../pages/Hunts";
-import HuntDetailPage from "../pages/HuntDetail";
-import ChatbotPage from "../pages/Chatbot";
-import AIAndSOARSettingsPage from "../pages/settings/AIAndSOAR";
-import InstanceSettings from "../pages/settings/InstanceSettings";
-import SearchPage from "../pages/Search"; 
-import Documentation from "../pages/settings/Documentation";
-import DocumentationDetail from "../pages/settings/DocumentationDetail";
-import Tasks from "../pages/Tasks";
-import TaskDetail from "../pages/TaskDetail";
 import RequireAnyPerm from "../components/RequireAnyPerm";
 import { useMe } from "../contexts/MeContext";
 import { getToken } from "../auth/auth";
 
+const Login = lazy(() => import("../pages/Login"));
+const Dashboard = lazy(() => import("../pages/Dashboard"));
+const Cases = lazy(() => import("../pages/Cases"));
+const CaseDetail = lazy(() => import("../pages/CaseDetail"));
+const CaseNew = lazy(() => import("../pages/CaseNew"));
+const Alerts = lazy(() => import("../pages/Alerts"));
+const AlertDetail = lazy(() => import("../pages/AlertDetail"));
+const SettingsUsers = lazy(() => import("../pages/settings/access-control/Users"));
+const SettingsRoles = lazy(() => import("../pages/settings/access-control/Roles"));
+const RoleEdit = lazy(() => import("../pages/settings/access-control/RoleEdit"));
+const RoleNew = RoleEdit;
+const SettingsDataModels = lazy(() => import("../pages/settings/DataModels"));
+const SettingsCustomers = lazy(() => import("../pages/settings/Customers"));
+const SettingsWorkbooks = lazy(() => import("../pages/settings/Workbooks"));
+const SettingsReports = lazy(() => import("../pages/settings/Reports"));
+const Connectors = lazy(() => import("../pages/settings/Connectors"));
+const SettingsCaseManagement = lazy(() => import("../pages/settings/CaseManagement"));
+const AutomationRuleEdit = lazy(() => import("../pages/settings/AutomationRuleEdit"));
+const Preferences = lazy(() => import("../pages/Preferences"));
+const SettingsAudit = lazy(() => import("../pages/settings/access-control/Audit"));
+const ResetPassword = lazy(() => import("../pages/settings/access-control/ResetPassword"));
+const HuntsPage = lazy(() => import("../pages/Hunts"));
+const HuntDetailPage = lazy(() => import("../pages/HuntDetail"));
+const ChatbotPage = lazy(() => import("../pages/Chatbot"));
+const AIAndSOARSettingsPage = lazy(() => import("../pages/settings/AIAndSOAR"));
+const InstanceSettings = lazy(() => import("../pages/settings/InstanceSettings"));
+const SearchPage = lazy(() => import("../pages/Search"));
+const Documentation = lazy(() => import("../pages/settings/Documentation"));
+const DocumentationDetail = lazy(() => import("../pages/settings/DocumentationDetail"));
+const Tasks = lazy(() => import("../pages/Tasks"));
+const TaskDetail = lazy(() => import("../pages/TaskDetail"));
 
 
 function RequireAuth() {
@@ -49,7 +50,7 @@ function RequirePerm({
   children,
 }: {
   any: string[];
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const me = useMe();
 
@@ -114,8 +115,8 @@ export const router = createBrowserRouter([
           { path: "settings/documentation", element: <RequirePerm any={["settings.documentation.view"]}><Documentation /></RequirePerm>, },
           { path: "settings/documentation/:slug", element: <RequirePerm any={["settings.documentation.view"]}><DocumentationDetail /></RequirePerm>, },
 
-          { path: "tasks", element: <RequirePerm any={["task.view"]}><Tasks /></RequirePerm> },
-          { path: "tasks/:id", element: <RequirePerm any={["task.view"]}><TaskDetail /></RequirePerm> },
+          { path: "tasks", element: <RequirePerm any={["task.view", "task.manage"]}><Tasks /></RequirePerm> },
+          { path: "tasks/:id", element: <RequirePerm any={["task.view", "task.manage"]}><TaskDetail /></RequirePerm> },
 
         ],
       },

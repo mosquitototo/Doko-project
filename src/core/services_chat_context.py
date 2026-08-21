@@ -18,17 +18,64 @@ class ChatContextRequest:
     customer_id: str | None
 
 
+def _requested_inclusions(req: ChatContextRequest) -> set[str]:
+    values = req.inclusions
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {
+        str(value or "").strip().lower()
+        for value in list(values)[:25]
+        if str(value or "").strip()
+    }
+
+
 class BaseContextProvider:
     required_permission = ""
+    resource_permission = ""
 
     def check(self, user, customer_id=None):
-        return user_has_perm(user, self.required_permission, customer_id=customer_id)
+        return user_has_perm(
+            user,
+            self.required_permission,
+            customer_id=customer_id,
+        ) and (
+            not self.resource_permission
+            or user_has_perm(user, self.resource_permission, customer_id=customer_id)
+        )
 
     def build(self, req: ChatContextRequest) -> dict:
         raise NotImplementedError
 
 
-CHAT_CONTEXT_LIMIT = 100
+CHAT_CONTEXT_LIMIT = 25
+CHAT_CONTEXT_SENSITIVE_KEYS = {
+    "password",
+    "secret",
+    "token",
+    "authorization",
+    "cookie",
+    "headers",
+    "raw",
+    "request_payload",
+    "response_payload",
+}
+
+
+def _minimize_context(value, depth=0):
+    if depth >= 7:
+        return "[truncated]"
+    if isinstance(value, dict):
+        return {
+            str(key): "[redacted]"
+            if str(key).lower() in CHAT_CONTEXT_SENSITIVE_KEYS
+            else _minimize_context(item, depth + 1)
+            for key, item in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_minimize_context(item, depth + 1) for item in value[:50]]
+    if isinstance(value, str):
+        return value[:4000]
+    return value
 
 def _model_field_names(model) -> set[str]:
     names = set()
@@ -53,19 +100,7 @@ def _safe_values(qs, fields: list[str]) -> list[dict]:
     if not selected:
         return []
 
-    return list(qs.values(*selected))
-
-
-def _order_recent(qs):
-    available = _model_field_names(qs.model)
-
-    if "created_at" in available:
-        return qs.order_by("-created_at")
-
-    if "updated_at" in available:
-        return qs.order_by("-updated_at")
-
-    return qs.order_by("-id")
+    return _minimize_context(list(qs.values(*selected)))
 
 
 def _scope_queryset(qs, user, customer_id=None):
@@ -139,22 +174,41 @@ class DashboardContextProvider(BaseContextProvider):
     required_permission = "chat.read.dashboard"
 
     def build(self, req: ChatContextRequest) -> dict:
+        global_payload = GlobalContextProvider().build(req)
         return {
             "page_type": "dashboard",
-            "filters": {},
-            "widgets": [],
-            "selected_period": None,
+            "generated_at": global_payload.get("generated_at"),
+            "case_metrics_2d": global_payload.get("case_metrics_2d", {}),
+            "case_metrics_7d": global_payload.get("case_metrics_7d", {}),
+            "alert_metrics_2d": global_payload.get("alert_metrics_2d", {}),
+            "alert_metrics_7d": global_payload.get("alert_metrics_7d", {}),
+            "hunt_metrics_7d": global_payload.get("hunt_metrics_7d", {}),
+            "task_metrics_2d": global_payload.get("task_metrics_2d", {}),
+            "task_metrics_7d": global_payload.get("task_metrics_7d", {}),
         }
 
 
 class AuditContextProvider(BaseContextProvider):
     required_permission = "chat.read.audit"
+    resource_permission = "settings.audit.view"
 
     def build(self, req: ChatContextRequest) -> dict:
+        from .models import AuditLog
+
+        events = list(
+            AuditLog.objects.order_by("-created_at").values(
+                "id",
+                "action",
+                "success",
+                "status_code",
+                "object_type",
+                "object_id",
+                "created_at",
+            )[:50]
+        )
         return {
             "page_type": "audit",
-            "filters": {},
-            "events": [],
+            "events": events,
         }
 
 
@@ -165,7 +219,7 @@ class GlobalContextProvider(BaseContextProvider):
         from . import models as core_models
 
         Alert = core_models.Alert
-        Event = core_models.Event
+        Case = core_models.Case
         Hunt = core_models.Hunt
         Task = getattr(core_models, "Task", None)
 
@@ -192,28 +246,8 @@ class GlobalContextProvider(BaseContextProvider):
             "task_metrics_7d": {},
         }
 
-        if user_has_perm(req.user, "chat.read.case", customer_id=req.customer_id):
-            cases_qs = _scope_queryset(Event.objects.all(), req.user, req.customer_id)
-
-            payload["recent_cases"] = _safe_values(
-                _order_recent(cases_qs)[:CHAT_CONTEXT_LIMIT],
-                [
-                    "id",
-                    "case_number",
-                    "title",
-                    "description",
-                    "status",
-                    "severity",
-                    "classification",
-                    "outcome",
-                    "iocs",
-                    "assets",
-                    "customer_id",
-                    "owner_id",
-                    "created_at",
-                    "updated_at",
-                ],
-            )
+        if user_has_perm(req.user, "chat.read.case", customer_id=req.customer_id) and user_has_perm(req.user, "case.view", customer_id=req.customer_id):
+            cases_qs = _scope_queryset(Case.objects.all(), req.user, req.customer_id)
 
             cases_2d = _recent_window(cases_qs, since_2d)
             cases_7d = _recent_window(cases_qs, since_7d)
@@ -246,29 +280,8 @@ class GlobalContextProvider(BaseContextProvider):
                 ),
             }
 
-        if user_has_perm(req.user, "chat.read.alert", customer_id=req.customer_id):
+        if user_has_perm(req.user, "chat.read.alert", customer_id=req.customer_id) and user_has_perm(req.user, "alert.view", customer_id=req.customer_id):
             alerts_qs = _scope_queryset(Alert.objects.all(), req.user, req.customer_id)
-
-            payload["recent_alerts"] = _safe_values(
-                _order_recent(alerts_qs)[:CHAT_CONTEXT_LIMIT],
-                [
-                    "id",
-                    "title",
-                    "description",
-                    "status",
-                    "severity",
-                    "classification",
-                    "source",
-                    "outcome",
-                    "iocs",
-                    "assets",
-                    "case_id",
-                    "customer_id",
-                    "owner_id",
-                    "created_at",
-                    "updated_at",
-                ],
-            )
 
             alerts_2d = _recent_window(alerts_qs, since_2d)
             alerts_7d = _recent_window(alerts_qs, since_7d)
@@ -301,30 +314,8 @@ class GlobalContextProvider(BaseContextProvider):
                 ),
             }
 
-        if user_has_perm(req.user, "chat.read.hunt", customer_id=req.customer_id):
+        if user_has_perm(req.user, "chat.read.hunt", customer_id=req.customer_id) and user_has_perm(req.user, "hunt.view", customer_id=req.customer_id):
             hunts_qs = _scope_queryset(Hunt.objects.all(), req.user, req.customer_id)
-
-            payload["recent_hunts"] = _safe_values(
-                _order_recent(hunts_qs)[:CHAT_CONTEXT_LIMIT],
-                [
-                    "id",
-                    "title",
-                    "context",
-                    "conclusion",
-                    "status",
-                    "verdict",
-                    "iocs",
-                    "assets",
-                    "customer_id",
-                    "owner_id",
-                    "investigation_started_at",
-                    "investigation_finished_at",
-                    "search_timeframe_start",
-                    "search_timeframe_end",
-                    "created_at",
-                    "updated_at",
-                ],
-            )
 
             hunts_7d = _recent_window(hunts_qs, since_7d)
 
@@ -333,33 +324,17 @@ class GlobalContextProvider(BaseContextProvider):
                 "by_status": _count_by_field(
                     hunts_7d,
                     "status",
-                    ["draft", "running", "completed", "closed"],
+                    ["to_do", "in_progress", "completed", "abandoned"],
                 ),
                 "by_verdict": _count_by_field(
                     hunts_7d,
                     "verdict",
-                    ["true_positive", "false_positive", "inconclusive"],
+                    ["unknown", "suspicious", "malicious", "benign", "false_positive"],
                 ),
             }
 
-        if Task and user_has_perm(req.user, "chat.read.task", customer_id=req.customer_id):
+        if Task and user_has_perm(req.user, "chat.read.task", customer_id=req.customer_id) and user_has_perm(req.user, "task.view", customer_id=req.customer_id):
             tasks_qs = _scope_task_queryset(Task.objects.all(), req.user, req.customer_id)
-
-            payload["recent_tasks"] = _safe_values(
-                _order_recent(tasks_qs)[:CHAT_CONTEXT_LIMIT],
-                [
-                    "id",
-                    "title",
-                    "description",
-                    "status",
-                    "priority",
-                    "due_date",
-                    "owner_id",
-                    "created_by_id",
-                    "created_at",
-                    "updated_at",
-                ],
-            )
 
             tasks_2d = _recent_window(tasks_qs, since_2d)
             tasks_7d = _recent_window(tasks_qs, since_7d)
@@ -397,9 +372,10 @@ class GlobalContextProvider(BaseContextProvider):
 
 class CaseContextProvider(BaseContextProvider):
     required_permission = "chat.read.case"
+    resource_permission = "case.view"
 
     def build(self, req: ChatContextRequest) -> dict:
-        from .models import Alert, CaseExchange, Comment, Event, TimelineItem
+        from .models import Alert, CaseExchange, Comment, Case, TimelineItem
 
         if not req.object_id:
             return {
@@ -409,7 +385,7 @@ class CaseContextProvider(BaseContextProvider):
             }
 
         case = (
-            _scope_queryset(Event.objects.all(), req.user, req.customer_id)
+            _scope_queryset(Case.objects.all(), req.user, req.customer_id)
             .filter(id=req.object_id)
             .select_related("customer", "owner")
             .first()
@@ -417,6 +393,13 @@ class CaseContextProvider(BaseContextProvider):
 
         if not case:
             return {"page_type": "case", "missing": True}
+
+        requested = _requested_inclusions(req)
+        include_summary = not requested or "summary" in requested
+        include_comments = "comments" in requested
+        include_timeline = bool({"timeline", "incident_timeline"} & requested)
+        include_exchanges = "exchanges" in requested
+        include_linked_alerts = bool({"alerts", "linked_alerts"} & requested)
 
         case_header = {
             "id": str(case.id),
@@ -435,12 +418,12 @@ class CaseContextProvider(BaseContextProvider):
             "updated_at": case.updated_at,
         }
 
-        case_iocs = case.iocs or []
-        case_assets = case.assets or []
+        case_iocs = (case.iocs or []) if "iocs" in requested else []
+        case_assets = (case.assets or []) if "assets" in requested else []
 
         comments = list(
             Comment.objects
-            .filter(event_id=case.id)
+            .filter(case_id=case.id)
             .select_related("author")
             .order_by("created_at")
             .values(
@@ -451,11 +434,11 @@ class CaseContextProvider(BaseContextProvider):
                 "author_id",
                 "author__username",
             )
-        )
+        ) if include_comments else []
 
         timeline = list(
             TimelineItem.objects
-            .filter(event_id=case.id)
+            .filter(case_id=case.id)
             .select_related("actor", "alert")
             .order_by("date", "created_at")
             .values(
@@ -470,7 +453,7 @@ class CaseContextProvider(BaseContextProvider):
                 "alert_id",
                 "alert__title",
             )
-        )
+        ) if include_timeline else []
 
         exchanges = list(
             CaseExchange.objects
@@ -493,7 +476,7 @@ class CaseContextProvider(BaseContextProvider):
                 "created_by__username",
                 "created_at",
             )
-        )
+        ) if include_exchanges else []
 
         linked_alerts = list(
             Alert.objects
@@ -516,12 +499,12 @@ class CaseContextProvider(BaseContextProvider):
                 "created_at",
                 "updated_at",
             )
-        )
+        ) if include_linked_alerts else []
 
         return {
             "page_type": "case",
             "current_tab": req.current_tab or "summary",
-            "header": case_header,
+            "header": case_header if include_summary else {},
             "iocs": case_iocs,
             "assets": case_assets,
             "comments": comments,
@@ -533,6 +516,7 @@ class CaseContextProvider(BaseContextProvider):
 
 class AlertContextProvider(BaseContextProvider):
     required_permission = "chat.read.alert"
+    resource_permission = "alert.view"
 
     def build(self, req: ChatContextRequest) -> dict:
         from .models import Alert, AlertComment
@@ -553,6 +537,11 @@ class AlertContextProvider(BaseContextProvider):
 
         if not alert:
             return {"page_type": "alert", "missing": True}
+
+        requested = _requested_inclusions(req)
+        include_summary = not requested or "summary" in requested
+        include_comments = "comments" in requested
+        include_linked_case = bool({"case", "linked_case"} & requested)
 
         alert_header = {
             "id": str(alert.id),
@@ -585,10 +574,10 @@ class AlertContextProvider(BaseContextProvider):
                 "author_id",
                 "author__username",
             )
-        )
+        ) if include_comments else []
 
         linked_case = None
-        if alert.case_id and alert.case:
+        if include_linked_case and alert.case_id and alert.case:
             linked_case = {
                 "id": str(alert.case.id),
                 "case_number": alert.case.case_number,
@@ -605,9 +594,9 @@ class AlertContextProvider(BaseContextProvider):
         return {
             "page_type": "alert",
             "current_tab": req.current_tab or "overview",
-            "header": alert_header,
-            "iocs": alert.iocs or [],
-            "assets": alert.assets or [],
+            "header": alert_header if include_summary else {},
+            "iocs": (alert.iocs or []) if "iocs" in requested else [],
+            "assets": (alert.assets or []) if "assets" in requested else [],
             "comments": comments,
             "linked_case": linked_case,
         }
@@ -615,6 +604,7 @@ class AlertContextProvider(BaseContextProvider):
 
 class HuntContextProvider(BaseContextProvider):
     required_permission = "chat.read.hunt"
+    resource_permission = "hunt.view"
 
     def build(self, req: ChatContextRequest) -> dict:
         from .models import Hunt, HuntCaseLink, HuntJournalEntry
@@ -635,6 +625,11 @@ class HuntContextProvider(BaseContextProvider):
 
         if not hunt:
             return {"page_type": "hunt", "missing": True}
+
+        requested = _requested_inclusions(req)
+        include_summary = not requested or "summary" in requested
+        include_journal = "journal" in requested
+        include_case_links = bool({"case_links", "linked_cases"} & requested)
 
         hunt_header = {
             "id": str(hunt.id),
@@ -673,7 +668,7 @@ class HuntContextProvider(BaseContextProvider):
                 "author_id",
                 "author__username",
             )
-        )
+        ) if include_journal else []
 
         linked_cases = list(
             HuntCaseLink.objects
@@ -695,15 +690,15 @@ class HuntContextProvider(BaseContextProvider):
                 "case__customer_id",
                 "case__owner_id",
             )
-        )
+        ) if include_case_links else []
 
         return {
             "page_type": "hunt",
             "current_tab": req.current_tab or "journal",
-            "header": hunt_header,
+            "header": hunt_header if include_summary else {},
             "journal": journal_entries,
-            "iocs": hunt.iocs or [],
-            "assets": hunt.assets or [],
+            "iocs": (hunt.iocs or []) if "iocs" in requested else [],
+            "assets": (hunt.assets or []) if "assets" in requested else [],
             "linked_cases": linked_cases,
             "timeline": [],
             "evidences": [],
@@ -712,6 +707,7 @@ class HuntContextProvider(BaseContextProvider):
 
 class TaskContextProvider(BaseContextProvider):
     required_permission = "chat.read.task"
+    resource_permission = "task.view"
 
     def build(self, req: ChatContextRequest) -> dict:
         from . import models as core_models
@@ -740,6 +736,9 @@ class TaskContextProvider(BaseContextProvider):
                 "missing": True,
             }
 
+        requested = _requested_inclusions(req)
+        include_summary = not requested or "summary" in requested
+
         task_data = _safe_values(
             tasks_qs.filter(id=task.id),
             [
@@ -759,7 +758,9 @@ class TaskContextProvider(BaseContextProvider):
         return {
             "page_type": "task",
             "current_tab": req.current_tab or "overview",
-            "header": task_data[0] if task_data else {"id": str(task.id)},
+            "header": (
+                task_data[0] if task_data else {"id": str(task.id)}
+            ) if include_summary else {},
         }
     
 
@@ -780,4 +781,4 @@ def build_chat_context_snapshot(req: ChatContextRequest) -> dict:
         return {"page_type": req.page_type or "global", "context": {}}
     if not provider.check(req.user, customer_id=req.customer_id):
         raise PermissionError("You do not have permission to read this chat context")
-    return provider.build(req)
+    return _minimize_context(provider.build(req))

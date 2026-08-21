@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from urllib.parse import urlsplit
 from .models import (
     Role,
     Permission,
@@ -33,6 +34,15 @@ class RoleSerializer(serializers.ModelSerializer):
         model = Role
         fields = ["id", "name", "description", "permissions", "permission_ids"]
 
+    def validate_permission_ids(self, value):
+        unique_ids = set(value)
+        existing_ids = set(
+            Permission.objects.filter(id__in=unique_ids).values_list("id", flat=True)
+        )
+        if existing_ids != unique_ids:
+            raise serializers.ValidationError("Unknown permission id.")
+        return list(unique_ids)
+
     def create(self, validated_data):
         perm_ids = validated_data.pop("permission_ids", [])
         role = Role.objects.create(**validated_data)
@@ -51,9 +61,11 @@ class RoleSerializer(serializers.ModelSerializer):
 
 
 class SettingsUserSerializer(serializers.ModelSerializer):
+    is_admin = serializers.BooleanField(source="is_staff")
+
     class Meta:
         model = User
-        fields = ["id", "username", "email", "is_active", "is_staff"]
+        fields = ["id", "username", "email", "is_active", "is_admin"]
 
 
 class SettingsUserApiTokenSerializer(serializers.ModelSerializer):
@@ -130,12 +142,20 @@ class InstanceProxySettingsSerializer(serializers.ModelSerializer):
         value = str(value or "").strip()
         if any(char in value for char in ["\n", "\r", "\t", " "]):
             raise serializers.ValidationError("Proxy host is invalid.")
-        if "/" in value and not value.startswith(("http://", "https://")):
-            raise serializers.ValidationError("Proxy host must not contain a path.")
-        if value.startswith(("http://", "https://")):
-            without_scheme = value.split("://", 1)[1]
-            if "/" in without_scheme:
-                raise serializers.ValidationError("Proxy host must not contain a path.")
+
+        parsed = urlsplit(value if "://" in value else f"http://{value}")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise serializers.ValidationError("Proxy host is invalid.")
+        if parsed.username is not None or parsed.password is not None:
+            raise serializers.ValidationError("Proxy credentials must use the dedicated fields.")
+        if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise serializers.ValidationError("Proxy host must not contain a path, query, or fragment.")
+        try:
+            embedded_port = parsed.port
+        except ValueError as exc:
+            raise serializers.ValidationError("Proxy host is invalid.") from exc
+        if embedded_port is not None:
+            raise serializers.ValidationError("Proxy port must use the dedicated field.")
         return value
 
     def validate(self, attrs):
@@ -228,6 +248,58 @@ AUTOMATION_INVESTIGATION_TARGET_SOURCES = {
     "first_asset",
     "first_ioc",
 }
+
+AUTOMATION_CONDITION_FIELDS_BY_SCOPE = {
+    "alert": {
+        "event", "title", "status", "owner", "classification", "severity",
+        "customer", "source", "ioc_count", "asset_count", "ioc", "asset",
+        "scheduled_time",
+    },
+    "case": set(AUTOMATION_CONDITION_FIELDS),
+    "hunt": {
+        "event", "title", "status", "owner", "customer", "object_age_hours",
+        "ioc_count", "asset_count", "ioc", "asset", "scheduled_time",
+    },
+}
+
+AUTOMATION_ACTION_SCOPES = {
+    "add_comment": {"alert", "case", "hunt"},
+    "exchange_message": {"alert", "case"},
+    "exchange_reply_last_inbound": {"alert", "case"},
+    "exchange_reply_all_inbound": {"alert", "case"},
+    "apply_workbook_template": {"case"},
+    "change_status": {"alert", "case", "hunt"},
+    "change_classification": {"alert", "case"},
+    "change_owner": {"alert", "case", "hunt"},
+    "change_customer": {"alert", "case", "hunt"},
+    "change_severity": {"alert", "case"},
+    "run_investigation_template": {"alert", "case", "hunt"},
+}
+
+AUTOMATION_STATUSES_BY_SCOPE = {
+    "alert": {"open", "in_progress", "merged", "closed"},
+    "case": {"open", "in_progress", "resolved", "closed", "archived"},
+    "hunt": {"to_do", "in_progress", "completed", "abandoned"},
+}
+
+
+def automation_condition_fields(value):
+    fields = set()
+
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        children = node.get("children")
+        if isinstance(children, list):
+            for child in children:
+                walk(child)
+            return
+        field = str(node.get("field") or "").strip()
+        if field:
+            fields.add(field)
+
+    walk(value or {})
+    return fields
 
 def validate_automation_conditions(value):
     if value in (None, ""):
@@ -431,23 +503,33 @@ class AutomationRuleSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         scope = attrs.get("scope") or (self.instance.scope if self.instance else "case")
-        actions = attrs.get("actions") or []
+        actions = attrs.get("actions", self.instance.actions if self.instance else []) or []
+        conditions = attrs.get("conditions", self.instance.conditions if self.instance else {}) or {}
+
+        unsupported_fields = automation_condition_fields(conditions) - AUTOMATION_CONDITION_FIELDS_BY_SCOPE[scope]
+        if unsupported_fields:
+            raise serializers.ValidationError(
+                f"Condition fields are not available for {scope} rules: {', '.join(sorted(unsupported_fields))}."
+            )
 
         for action in actions:
             action_type = str(action.get("type") or "")
-
-            if action_type == "apply_workbook_template" and scope != "case":
+            if scope not in AUTOMATION_ACTION_SCOPES.get(action_type, set()):
                 raise serializers.ValidationError(
-                    "Workbook actions are only available for case rules."
+                    f"{action_type} is not available for {scope} rules."
                 )
 
-            if action_type in {
-                "exchange_message",
-                "exchange_reply_last_inbound",
-                "exchange_reply_all_inbound",
-            } and scope == "hunt":
+            if action_type == "change_status":
+                value = str(action.get("value") or "").strip()
+                if value not in AUTOMATION_STATUSES_BY_SCOPE[scope]:
+                    raise serializers.ValidationError("Invalid status for this automation scope.")
+
+            if action_type in {"change_classification", "change_severity"} and not str(action.get("value") or "").strip():
+                raise serializers.ValidationError("A value is required for this automation action.")
+
+            if action_type == "run_investigation_template" and action.get("post_result_comment") and scope == "hunt":
                 raise serializers.ValidationError(
-                    "Exchange actions are not available for hunt rules."
+                    "Investigation results cannot be posted as case comments from hunt rules."
                 )
 
         return attrs

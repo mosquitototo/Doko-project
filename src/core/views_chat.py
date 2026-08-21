@@ -9,8 +9,8 @@ from django.utils import timezone
 from .models import ChatGeneratedDraft, ChatRun, ChatSession, InvestigationTemplate
 from .rbac import user_has_perm, get_accessible_customer_ids
 from .serializers_chat import ChatRunSerializer, ChatSessionSerializer
-from .services_chat import create_chat_run, execute_chat_run, generate_comment_draft, refresh_chat_run_actions
-from .services_chat_posting import post_generated_draft, user_can_access_draft_target
+from .services_chat import create_chat_run, generate_comment_draft, refresh_chat_run_actions
+from .services_chat_posting import post_generated_draft, user_has_draft_target_permission
 from .celerytasks import execute_chat_run_task
 
 
@@ -99,33 +99,20 @@ class ChatSessionClearView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        now = timezone.now()
-
-        ChatRun.objects.filter(
-            session=session,
-            status__in=["queued", "running"],
-        ).update(
-            cancel_requested=True,
-            cancel_requested_at=now,
-            updated_at=now,
-        )
-
-        session.is_archived = True
-        session.save(
-            update_fields=[
-                "is_archived",
-                "updated_at",
-            ]
-        )
+        replacement_values = {
+            "title": session.title,
+            "surface": session.surface,
+            "page_type": session.page_type,
+            "object_id": session.object_id,
+            "customer_id": session.customer_id,
+            "client_tab_id": session.client_tab_id,
+        }
+        ChatRun.objects.filter(session=session).delete()
+        session.delete()
 
         replacement = ChatSession.objects.create(
             user=request.user,
-            title=session.title,
-            surface=session.surface,
-            page_type=session.page_type,
-            object_id=session.object_id,
-            customer_id=session.customer_id,
-            client_tab_id=session.client_tab_id,
+            **replacement_values,
         )
 
         return Response(
@@ -159,6 +146,12 @@ class ChatRunCreateView(APIView):
                 {"detail": "client_tab_id, request_id and message are required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if len(message) > 20000:
+            return Response({"detail": "Message is too long"}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing_run = ChatRun.objects.filter(session=session, request_id=request_id).first()
+        if existing_run:
+            return Response(ChatRunSerializer(existing_run).data, status=status.HTTP_200_OK)
         
         template_code = str(request.data.get("template_code") or "").strip()
         chat_command = str(request.data.get("chat_command") or "").strip()
@@ -210,9 +203,11 @@ class ChatRunCreateView(APIView):
             }
             run.save(update_fields=["worker_task_id", "provider_execution", "updated_at"])
         except Exception:
-            execute_chat_run(run)
-            run.refresh_from_db()
-            return Response(ChatRunSerializer(run).data, status=status.HTTP_201_CREATED)
+            run.status = "failed"
+            run.error_message = "The background worker is unavailable."
+            run.completed_at = timezone.now()
+            run.save(update_fields=["status", "error_message", "completed_at", "updated_at"])
+            return Response(ChatRunSerializer(run).data, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
         run.refresh_from_db()
         return Response(ChatRunSerializer(run).data, status=status.HTTP_201_CREATED)
@@ -276,16 +271,12 @@ class ChatGenerateDraftView(APIView):
             return Response({"detail": "target_id is required."}, status=status.HTTP_400_BAD_REQUEST)
         
 
-        if target_type == "case_comment" and not user_has_perm(request.user, "chat.comment.case.generate"):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
-        if target_type == "alert_comment" and not user_has_perm(request.user, "chat.comment.alert.generate"):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
-        if target_type == "hunt_note" and not user_has_perm(request.user, "chat.comment.hunt.generate"):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
-        if not user_can_access_draft_target(request.user, target_type, target_id):
+        if not user_has_draft_target_permission(
+            request.user,
+            target_type,
+            target_id,
+            "generate",
+        ):
             return _forbidden()
 
         draft = generate_comment_draft(run=run, target_type=target_type, target_id=target_id)
@@ -314,13 +305,12 @@ class ChatPostDraftView(APIView):
             return Response({"detail": "Invalid target_type."}, status=status.HTTP_400_BAD_REQUEST)
         
         
-        if draft.target_type == "case_comment" and not user_has_perm(request.user, "chat.comment.case.post"):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
-        if draft.target_type == "alert_comment" and not user_has_perm(request.user, "chat.comment.alert.post"):
-            return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
-
-        if draft.target_type == "hunt_note" and not user_has_perm(request.user, "chat.comment.hunt.post"):
+        if not user_has_draft_target_permission(
+            request.user,
+            draft.target_type,
+            draft.target_id,
+            "post",
+        ):
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
         
         post_generated_draft(user=request.user, draft=draft)

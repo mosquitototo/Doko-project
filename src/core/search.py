@@ -13,7 +13,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.throttling import UserRateThrottle
 
 from .models import (
-    Event,
+    Case,
     Alert,
     Comment,
     AlertComment,
@@ -200,7 +200,7 @@ def build_unified_search_results(
 
     results: list[dict[str, Any]] = []
 
-    case_qs = Event.objects.filter(is_deleted=False)
+    case_qs = Case.objects.filter(is_deleted=False)
     alert_qs = Alert.objects.filter(is_deleted=False)
     hunt_qs = Hunt.objects.filter(is_deleted=False)
 
@@ -395,13 +395,13 @@ def build_unified_search_results(
     case_comments = (
         Comment.objects.filter(
             case_comment_filter,
-            event__is_deleted=False,
+            case__is_deleted=False,
         )
-        .select_related("event", "event__customer", "author")
+        .select_related("case", "case__customer", "author")
         .order_by("-updated_at")
     )
     if allowed_case_customers is not None:
-        case_comments = case_comments.filter(event__customer_id__in=allowed_case_customers)
+        case_comments = case_comments.filter(case__customer_id__in=allowed_case_customers)
     case_comments = case_comments[:per_type_limit]
 
     for item in case_comments:
@@ -409,12 +409,12 @@ def build_unified_search_results(
             _result(
                 result_type="case_comment",
                 object_id=str(item.id),
-                title=f"Comment on case: {item.event.title}",
+                title=f"Comment on case: {item.case.title}",
                 snippet=_snippet(item.text, q),
-                url=f"/cases/{item.event_id}",
-                customer_name=item.event.customer.name if item.event.customer else "",
+                url=f"/cases/{item.case_id}",
+                customer_name=item.case.customer.name if item.case.customer else "",
                 updated_at=item.updated_at,
-                parent={"type": "case", "id": str(item.event_id), "url": f"/cases/{item.event_id}"},
+                parent={"type": "case", "id": str(item.case_id), "url": f"/cases/{item.case_id}"},
             )
         )
 

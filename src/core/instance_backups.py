@@ -19,11 +19,6 @@ ALLOWED_RESTORE_EXTENSIONS = (".dump", ".backup")
 MAX_RESTORE_SIZE = 250 * 1024 * 1024
 
 
-def build_backup_filename() -> str:
-    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    return f"doko-db-{timestamp}.sql.gz"
-
-
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as fh:

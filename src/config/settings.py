@@ -1,5 +1,7 @@
 from pathlib import Path
 from datetime import timedelta
+import hashlib
+import hmac
 import os
 from dotenv import load_dotenv
 
@@ -11,10 +13,18 @@ load_dotenv(BASE_DIR.parent / ".env")
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "unsafe-test-secret-key")
 DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
 
-if not DEBUG and SECRET_KEY == "unsafe-test-secret-key":
-    raise RuntimeError("DJANGO_SECRET_KEY must be configured when DEBUG is disabled.")
+if not DEBUG and (
+    SECRET_KEY in {
+        "unsafe-test-secret-key",
+        "change_me",
+        "changeme",
+        "change-me",
+        "replace_with_a_unique_random_value_of_at_least_32_characters",
+    }
+    or len(SECRET_KEY) < 32
+):
+    raise RuntimeError("DJANGO_SECRET_KEY must be a unique value of at least 32 characters when DEBUG is disabled.")
 
-### remove web, used for audit only
 ALLOWED_HOSTS = [
     host.strip()
     for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1,web").split(",")
@@ -23,6 +33,7 @@ ALLOWED_HOSTS = [
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+INSTANCE_BACKUP_DIR = os.getenv("DOKO_BACKUP_DIR", str(MEDIA_ROOT / "backups"))
 
 
 CSP_DEFAULT_SRC = ("'self'",)
@@ -46,21 +57,25 @@ SECURE_BROWSER_XSS_FILTER = False
 X_FRAME_OPTIONS = "DENY"
 
 SECURE_REFERRER_POLICY = "same-origin"
+SECURE_SSL_REDIRECT = os.getenv("DJANGO_SECURE_SSL_REDIRECT", "0") == "1"
+COOKIE_SECURE = os.getenv("DJANGO_COOKIE_SECURE", "1" if SECURE_SSL_REDIRECT else "0") == "1"
 SESSION_COOKIE_NAME = "doko_sessionid"
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = COOKIE_SECURE
 SESSION_COOKIE_AGE = 60 * 60 * 12
 SESSION_SAVE_EVERY_REQUEST = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
-SECURE_SSL_REDIRECT = os.getenv("DJANGO_SECURE_SSL_REDIRECT", "0") == "1"
+SECURE_HSTS_SECONDS = int(os.getenv("DJANGO_SECURE_HSTS_SECONDS", "31536000" if SECURE_SSL_REDIRECT else "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
+SECURE_HSTS_PRELOAD = SECURE_HSTS_SECONDS > 0
 
 
 CSRF_COOKIE_NAME = "csrftoken"
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = "Lax"
-CSRF_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = COOKIE_SECURE
 
 INSTALLED_APPS = [
     "csp",
@@ -94,7 +109,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-_default_frontend_origins = "http://localhost:5173,http://127.0.0.1:5173"
+_default_frontend_origins = "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else ""
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
@@ -211,4 +226,8 @@ REST_KNOX = {
 }
 
 CONNECTOR_HUB_URL = os.environ.get("CONNECTOR_HUB_URL", "").strip()
-CONNECTOR_HMAC_SECRET = os.environ.get("CONNECTOR_HMAC_SECRET", "").strip()
+CONNECTOR_HMAC_SECRET = os.environ.get("CONNECTOR_HMAC_SECRET", "").strip() or hmac.new(
+    SECRET_KEY.encode("utf-8"),
+    b"doko.connector-hub.hmac.v1",
+    hashlib.sha256,
+).hexdigest()

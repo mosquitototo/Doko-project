@@ -21,6 +21,7 @@ import {
   type AutomationConditionNode,
   type AutomationConditionOperator,
   type AutomationGroupOperator,
+  type AutomationInvestigationTargetSource,
   type AutomationRule,
   type AutomationRuleMetadata,
   type AutomationScope,
@@ -237,7 +238,6 @@ function conditionFieldsForScope(
       "title",
       "status",
       "owner",
-      "classification",
       "customer",
       "object_age_hours",
       "ioc_count",
@@ -820,7 +820,7 @@ function ActionEditor({
             { value: "exchange_reply_last_inbound", label: "Reply to last inbound Exchange", scopes: ["case", "alert"] },
             { value: "exchange_reply_all_inbound", label: "Reply to all inbound Exchanges", scopes: ["case", "alert"] },
             { value: "change_status", label: "Change status", scopes: ["case", "alert", "hunt"] },
-            { value: "change_classification", label: "Change classification", scopes: ["case", "alert", "hunt"] },
+            { value: "change_classification", label: "Change classification", scopes: ["case", "alert"] },
             { value: "change_owner", label: "Change owner", scopes: ["case", "alert", "hunt"] },
             { value: "change_customer", label: "Change customer", scopes: ["case", "alert", "hunt"] },
             { value: "change_severity", label: "Change severity", scopes: ["case", "alert"] },
@@ -902,7 +902,7 @@ function ActionEditor({
                     to: recipientTextToList(e.target.value),
                     })
                 }
-                placeholder="soc@example.com, customer@example.com"
+                placeholder="automation@example.com, contact@example.com"
                 />
             </label>
             ) : null}
@@ -994,7 +994,8 @@ function ActionEditor({
                 onChange={(e) =>
                 onChange({
                     ...action,
-                    target_source: e.target.value,
+                    target_source:
+                      e.target.value as AutomationInvestigationTargetSource,
                     target_value: "",
                     target_type: "",
                     variables: {},
@@ -1054,7 +1055,7 @@ function ActionEditor({
             </div>
             ) : null}
 
-          <div className="space-y-3">
+          {scope !== "hunt" ? <div className="space-y-3">
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
               <input
                 type="checkbox"
@@ -1082,19 +1083,21 @@ function ActionEditor({
                   onChange={(e) =>
                     onChange({
                       ...action,
-                      post_result_comment_mode: e.target.value,
+                      post_result_comment_mode: e.target.value as
+                        | "raw"
+                        | "chatbot",
                     })
                   }
                 >
                   <option value="raw">Post extracted result</option>
-                  <option value="chatbot">Post chatbot summary</option>
+                  <option value="chatbot">Post Catbot summary</option>
                 </SettingSelect>
                 <div className="text-xs text-muted-foreground">
-                  Chatbot summary uses the configured default AI provider.
+                  Catbot summary uses the configured default AI provider.
                 </div>
               </label>
             ) : null}
-          </div>
+          </div> : null}
         </div>
         ) : null}
       </div>
@@ -1149,7 +1152,7 @@ export default function AutomationRuleEdit() {
   const { push } = useToast();
   const me = useMe();
 
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canManage = can("settings.automation_rules.manage");
 
   const [loading, setLoading] = useState(true);

@@ -23,22 +23,54 @@ SENSITIVE_METADATA_KEYS = {
     "authorization",
     "cookie",
     "set-cookie",
+    "token_key",
+    "email",
+    "content",
+    "text",
+    "body",
+    "payload",
+    "request_payload",
+    "response_payload",
+    "description",
+    "subject",
+    "message",
+    "prompt",
+    "output",
+    "output_payload",
+    "variables",
+    "iocs",
+    "assets",
+    "error",
 }
 
 
-def _redact_metadata(value):
+def _is_sensitive_metadata_key(key):
+    normalized = str(key or "").lower().replace("-", "_")
+    return any(
+        sensitive == normalized or sensitive in normalized
+        for sensitive in SENSITIVE_METADATA_KEYS
+    )
+
+
+def sanitize_audit_metadata(value, depth=0):
+    if depth >= 6:
+        return "[truncated]"
+
     if isinstance(value, dict):
         out = {}
-        for k, v in value.items():
+        for k, v in list(value.items())[:100]:
             key = str(k)
-            if key.lower() in SENSITIVE_METADATA_KEYS:
-                out[key] = "***"
+            if _is_sensitive_metadata_key(key):
+                out[key] = "[redacted]"
             else:
-                out[key] = _redact_metadata(v)
+                out[key] = sanitize_audit_metadata(v, depth + 1)
         return out
 
     if isinstance(value, list):
-        return [_redact_metadata(item) for item in value]
+        return [sanitize_audit_metadata(item, depth + 1) for item in value[:100]]
+
+    if isinstance(value, str):
+        return value[:500]
 
     return value
 
@@ -81,14 +113,14 @@ def audit_log(
         status_code=status_code,
         object_type=object_type or "",
         object_id=object_id or "",
-        object_repr=object_repr or "",
+        object_repr="",
         ip_address=_get_ip(request),
         user_agent=(request.META.get("HTTP_USER_AGENT") or "")[:255],
         method=(request.method or "")[:12],
         path=(request.path or "")[:255],
         request_id=rid,
         duration_ms=getattr(request, "audit_duration_ms", None),
-        metadata=_redact_metadata(metadata or {}),
+        metadata=sanitize_audit_metadata(metadata or {}),
     )
 
 
@@ -111,5 +143,5 @@ def audit_event(
         object_type=object_type,
         object_id=str(object_id or ""),
         object_repr=(object_repr or "")[:255],
-        metadata=_redact_metadata(metadata or {}),
+        metadata=sanitize_audit_metadata(metadata or {}),
     )

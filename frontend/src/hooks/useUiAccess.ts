@@ -21,7 +21,7 @@ export function useUiAccess() {
   const me = useMe();
 
   const can = useCallback(
-    (perm: string) => !!me?.is_staff || !!me?.permissions?.includes(perm),
+    (perm: string) => !!me?.is_admin || !!me?.permissions?.includes(perm),
     [me]
   );
 

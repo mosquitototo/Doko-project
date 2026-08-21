@@ -4,7 +4,7 @@ import {
   addComment,
   deleteAttachment,
   deleteComment,
-  fetchEventDetail,
+  fetchCaseDetail,
   getCaseWorkbook,
   listAttachments,
   listComments,
@@ -14,11 +14,11 @@ import {
   patchWorkbookItem,
   type Attachment,
   type Comment,
-  type EventDetail,
+  type CaseDetail,
   type LinkedTask,
   unmergeAlert,
   updateComment,
-  updateEventStatus,
+  updateCaseStatus,
   uploadAttachment,
 } from "../api/caseDetail";
 import { archiveCase, deleteCase, unarchiveCase, updateTicket } from "../api/cases";
@@ -54,7 +54,7 @@ export default function TicketDetail() {
 
   const { id } = useParams();
   const ticketId = id || "";
-  const [event, setEvent] = useState<EventDetail | null>(null);
+  const [caseItem, setCase] = useState<CaseDetail | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -69,7 +69,7 @@ export default function TicketDetail() {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [confirm, setConfirm] = useState<{ kind: "comment" | "attachment"; id: string } | null>(null);
   const [activityLimit] = useState(10);
-  const timeline = useMemo(() => event?.timeline_items ?? [], [event]);
+  const timeline = useMemo(() => caseItem?.timeline_items ?? [], [caseItem]);
   const [busyCaseId, setBusyCaseId] = useState<string | null>(null);
   const [linkedAlerts, setLinkedAlerts] = useState<any[]>([]);
   const [linkedTasks, setLinkedTasks] = useState<LinkedTask[]>([]);
@@ -96,10 +96,10 @@ export default function TicketDetail() {
   
   const [autoFollowupOpen, setAutoFollowupOpen] = useState(false);
   useEffect(() => {
-    setAutoFollowupEnabled(!!event?.auto_followup_enabled);
-    setAutoFollowupDelayValue(String(event?.auto_followup_delay_value ?? 24));
+    setAutoFollowupEnabled(!!caseItem?.auto_followup_enabled);
+    setAutoFollowupDelayValue(String(caseItem?.auto_followup_delay_value ?? 24));
     setAutoFollowupDelayUnit(
-      (event?.auto_followup_delay_unit as
+      (caseItem?.auto_followup_delay_unit as
         | "minute"
         | "hour"
         | "day"
@@ -108,18 +108,18 @@ export default function TicketDetail() {
         | undefined) ?? "hour"
     );
     setAutoFollowupAction(
-      ((event as any)?.auto_followup_action as "save" | "send" | undefined) ?? "save"
+      ((caseItem as any)?.auto_followup_action as "save" | "send" | undefined) ?? "save"
     );
-    setAutoFollowupQuickpartId(String(event?.auto_followup_quickpart_id ?? ""));
+    setAutoFollowupQuickpartId(String(caseItem?.auto_followup_quickpart_id ?? ""));
   }, [
-    event?.auto_followup_enabled,
-    event?.auto_followup_delay_value,
-    event?.auto_followup_delay_unit,
-    event?.auto_followup_quickpart_id,
+    caseItem?.auto_followup_enabled,
+    caseItem?.auto_followup_delay_value,
+    caseItem?.auto_followup_delay_unit,
+    caseItem?.auto_followup_quickpart_id,
   ]);
 
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canUnmerge = can("alert.unmerge");
   const canDeleteCase = can("case.delete");
   const canUpdateCase = can("case.update");
@@ -135,9 +135,9 @@ export default function TicketDetail() {
 
   useEffect(() => {
     if (tab !== "summary") return;
-    setEditTitle(event?.title ?? "");
-    if (!descFocusedRef.current) setEditDescription(event?.description ?? "");
-  }, [tab, event?.title, event?.description]);
+    setEditTitle(caseItem?.title ?? "");
+    if (!descFocusedRef.current) setEditDescription(caseItem?.description ?? "");
+  }, [tab, caseItem?.title, caseItem?.description]);
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   useEffect(() => {
@@ -238,9 +238,9 @@ export default function TicketDetail() {
     const seq = ++refreshSeq.current;
     setError(null);
 
-    const e = await fetchEventDetail(ticketId);
+    const e = await fetchCaseDetail(ticketId);
     if (seq !== refreshSeq.current) return;
-    setEvent(e);
+    setCase(e);
     setEditTitle(e.title);
     if (!(tab === "summary" && descFocusedRef.current)) setEditDescription(e.description || "");
 
@@ -713,7 +713,7 @@ export default function TicketDetail() {
   
   async function saveIfDirty(description?: string) {
     if (!canUpdateCase) return;
-    if (!ticketId || !event) return;
+    if (!ticketId || !caseItem) return;
     if (saveInFlightRef.current) {
       saveQueuedRef.current = true;
       return;
@@ -721,15 +721,15 @@ export default function TicketDetail() {
     const nextTitle = editTitle.trim();
     const nextDesc = description ?? editDescription ?? "";
     if (!nextTitle) {
-      setEditTitle(event.title);
+      setEditTitle(caseItem.title);
       return;
     }
-    if (nextTitle === (event.title ?? "") && nextDesc === (event.description ?? "")) return;
+    if (nextTitle === (caseItem.title ?? "") && nextDesc === (caseItem.description ?? "")) return;
     saveInFlightRef.current = true;
     setBusy(true);
     try {
       await updateTicket(ticketId, { title: nextTitle, description: nextDesc } as any);
-      setEvent((prev) => (prev ? ({ ...prev, title: nextTitle, description: nextDesc } as any) : prev));
+      setCase((prev) => (prev ? ({ ...prev, title: nextTitle, description: nextDesc } as any) : prev));
       setEditTitle(nextTitle);
       setEditDescription(nextDesc);
       push({ kind: "success", title: "Saved" });
@@ -798,7 +798,7 @@ export default function TicketDetail() {
     if (editableRef.current.textContent !== editTitle) editableRef.current.textContent = editTitle;
   }, [editTitle]);
 
-  const isArchived = !!(event as any)?.archived_at;
+  const isArchived = !!(caseItem as any)?.archived_at;
   async function toggleArchive() {
     if (!canUpdateCase) return;
     if (!ticketId || busy || archiveBusy) return;
@@ -824,7 +824,7 @@ export default function TicketDetail() {
     if (!ticketId) return;
     setBusy(true);
     try {
-      await updateEventStatus(ticketId, next);
+      await updateCaseStatus(ticketId, next);
       push({ kind: "success", title: "Status updated" });
       await refreshAll();
     } finally {
@@ -1063,9 +1063,9 @@ export default function TicketDetail() {
   const selectedTargets = useMemo(() => {
     const rows: any[] =
       selectMode === "ioc"
-        ? ((event as any)?.iocs || [])
+        ? ((caseItem as any)?.iocs || [])
         : selectMode === "asset"
-        ? ((event as any)?.assets || [])
+        ? ((caseItem as any)?.assets || [])
         : [];
 
     const out: ConnectorTarget[] = [];
@@ -1087,7 +1087,7 @@ export default function TicketDetail() {
     }
 
     return out;
-  }, [selectMode, activeSelectedKeys, event]);
+  }, [selectMode, activeSelectedKeys, caseItem]);
 
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
   const [historyDrawerMode, setHistoryDrawerMode] = useState<"ioc" | "asset">("ioc");
@@ -1133,15 +1133,15 @@ export default function TicketDetail() {
   }
 
   if (error) return <div className="text-red-600">{error}</div>;
-  if (!event) return <div>Loading •••</div>;
+  if (!caseItem) return <div>Loading •••</div>;
 
-  const iocs: KVRow[] = ((event as any).iocs || []) as any;
-  const assets: KVRow[] = ((event as any).assets || []) as any;
+  const iocs: KVRow[] = ((caseItem as any).iocs || []) as any;
+  const assets: KVRow[] = ((caseItem as any).assets || []) as any;
 
   return (
     <div className="space-y-6">
       <CaseHeader
-        event={event}
+        caseItem={caseItem}
         ticketId={ticketId}
         busy={busy}
         canUpdateCase={canUpdateCase}
@@ -1203,7 +1203,7 @@ export default function TicketDetail() {
         <CaseSummaryTab
           busy={busy}
           editDescription={editDescription}
-          description={event?.description ?? ""}
+          description={caseItem?.description ?? ""}
           canUpdateCase={canUpdateCase}
           setEditDescription={setEditDescription}
           saveIfDirty={saveIfDirty}
@@ -1333,7 +1333,7 @@ export default function TicketDetail() {
           instancesBusy={instancesBusy}
           openHistoryDrawer={openHistoryDrawer}
           setBusy={setBusy}
-          setEvent={setEvent}
+          setCase={setCase}
         />
       ) : null}
 

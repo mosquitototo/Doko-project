@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:18
+    image: postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941
     container_name: doko-postgres
     restart: unless-stopped
     environment:
@@ -22,7 +22,7 @@ services:
       - dokonet
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
     container_name: doko-redis
     restart: unless-stopped
     networks:
@@ -40,7 +40,7 @@ services:
     container_name: doko-web
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DOKO_ENV_FILE:-.env}
     environment:
       CONNECTOR_HUB_URL: "http://connector_hub:8080"
       CELERY_BROKER_URL: "redis://redis:6379/0"
@@ -50,6 +50,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8000/api/health/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
     volumes:
       - doko_media:/app/media
       - doko_static:/app/staticfiles
@@ -66,7 +72,7 @@ services:
     container_name: doko-celery-worker
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DOKO_ENV_FILE:-.env}
     environment:
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
@@ -74,6 +80,8 @@ services:
       - doko_media:/app/media
     command: celery -A core worker -l INFO
     depends_on:
+      web:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
@@ -88,7 +96,7 @@ services:
     container_name: doko-celery-beat
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DOKO_ENV_FILE:-.env}
     environment:
       CELERY_BROKER_URL: "redis://redis:6379/0"
       CELERY_RESULT_BACKEND: "redis://redis:6379/0"
@@ -97,6 +105,8 @@ services:
       - celerybeat_data:/app/celerybeat
     command: celery -A core beat -l INFO --schedule /app/celerybeat/celerybeat-schedule
     depends_on:
+      web:
+        condition: service_healthy
       db:
         condition: service_healthy
       redis:
@@ -112,7 +122,13 @@ services:
     container_name: doko-connector-hub
     restart: unless-stopped
     env_file:
-      - .env
+      - ${DOKO_ENV_FILE:-.env}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
     networks:
       - dokonet
 
@@ -124,7 +140,8 @@ services:
     container_name: doko-nginx
     restart: unless-stopped
     depends_on:
-      - web
+      web:
+        condition: service_healthy
     ports:
       - "${DOKO_HTTP_BIND:-127.0.0.1}:${DOKO_HTTP_PORT:-8080}:80"
     volumes:

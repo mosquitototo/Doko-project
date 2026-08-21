@@ -304,7 +304,7 @@ function ColumnsPicker(props: {
 export default function SettingsAudit() {
   const { push } = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView = can("settings.audit.view");
 
   const [loading, setLoading] = useState(false);

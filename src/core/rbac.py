@@ -4,7 +4,29 @@ from django.db.models import Q
 from .models import Permission, Role, CustomerAccess
 
 
-CUSTOMER_SCOPED_PREFIXES = ("case.", "alert.", "hunt.", "task.")
+CUSTOMER_SCOPED_PREFIXES = (
+    "case.",
+    "alert.",
+    "hunt.",
+    "task.",
+    "chat.read.case",
+    "chat.read.alert",
+    "chat.read.hunt",
+    "chat.read.task",
+    "chat.read.dashboard",
+    "chat.comment.case.",
+    "chat.comment.alert.",
+    "chat.comment.hunt.",
+)
+
+
+def is_doko_admin(user) -> bool:
+    return bool(
+        user
+        and getattr(user, "is_authenticated", False)
+        and getattr(user, "is_active", False)
+        and getattr(user, "is_staff", False)
+    )
 
 
 def _is_customer_scoped_perm(code: str) -> bool:
@@ -47,6 +69,9 @@ def expand_permissions(perms: set[str]) -> set[str]:
     if any(code.startswith("chat.") for code in perms):
         perms.add("chat.use")
 
+    if "task.manage" in perms:
+        perms.update({"task.view", "task.add"})
+
     return perms
 
 
@@ -66,42 +91,29 @@ def _assigned_roles(user):
 
 def _global_role_permissions(roles_qs) -> set[str]:
     all_role_permissions = _roles_to_perm_codes(roles_qs)
-    non_customer_scoped = {
+    return {
         code for code in all_role_permissions
         if not _is_customer_scoped_perm(code)
     }
-
-    global_roles = roles_qs.filter(customer_access_rules__isnull=True).distinct()
-    global_role_permissions = _roles_to_perm_codes(global_roles)
-    global_customer_scoped = {
-        code for code in global_role_permissions
-        if _is_customer_scoped_perm(code)
-    }
-
-    return non_customer_scoped | global_customer_scoped
 
 
 def _scoped_role_permissions(user, roles_qs, customer_id) -> set[str]:
     if not customer_id:
         return set()
 
-    role_ids = roles_qs.values_list("id", flat=True)
+    role_ids = list(roles_qs.values_list("id", flat=True))
+    direct_access = CustomerAccess.objects.filter(
+        customer_id=customer_id,
+        user=user,
+    ).exists()
 
-    scoped_roles = (
-        Role.objects
-        .filter(
-            Q(
-                customer_access_rules__customer_id=customer_id,
-                customer_access_rules__user=user,
-            )
-            | Q(
-                customer_access_rules__customer_id=customer_id,
-                customer_access_rules__user__isnull=True,
-                customer_access_rules__role_id__in=role_ids,
-            )
-        )
-        .distinct()
+    scoped_roles = roles_qs if direct_access else Role.objects.none()
+    role_scoped = roles_qs.filter(
+        customer_access_rules__customer_id=customer_id,
+        customer_access_rules__user__isnull=True,
+        customer_access_rules__role_id__in=role_ids,
     )
+    scoped_roles = (scoped_roles | role_scoped).distinct()
 
     return _roles_to_perm_codes(scoped_roles)
 
@@ -113,7 +125,7 @@ def get_user_permissions(user, customer_id=None) -> set[str]:
     if not getattr(user, "is_active", False):
         return set()
 
-    if getattr(user, "is_staff", False):
+    if is_doko_admin(user):
         return {"*"}
 
     assigned_roles = _assigned_roles(user)
@@ -121,19 +133,22 @@ def get_user_permissions(user, customer_id=None) -> set[str]:
 
     if customer_id:
         perms |= _scoped_role_permissions(user, assigned_roles, customer_id)
-    else:
-        accessible_customer_ids = get_accessible_customer_ids(user)
-        if accessible_customer_ids:
-            visible_scoped_roles = (
-                assigned_roles
-                .filter(customer_access_rules__customer_id__in=accessible_customer_ids)
-                .distinct()
-            )
-            perms |= {
-                code for code in _roles_to_perm_codes(visible_scoped_roles)
-                if _is_customer_scoped_perm(code)
-            }
+    return expand_permissions(perms)
 
+
+def get_user_permission_codes_for_display(user) -> set[str]:
+    perms = get_user_permissions(user)
+    if not user or not getattr(user, "is_authenticated", False) or is_doko_admin(user):
+        return perms
+
+    assigned_roles = _assigned_roles(user)
+    accessible_customer_ids = get_accessible_customer_ids(user)
+    for customer_id in accessible_customer_ids:
+        perms |= {
+            code
+            for code in _scoped_role_permissions(user, assigned_roles, customer_id)
+            if _is_customer_scoped_perm(code)
+        }
     return expand_permissions(perms)
 
 
@@ -144,7 +159,7 @@ def user_has_perm(user, perm_code: str, customer_id=None) -> bool:
     if not getattr(user, "is_active", False):
         return False
 
-    if getattr(user, "is_staff", False):
+    if is_doko_admin(user):
         return True
 
     perm_code = str(perm_code or "").strip()
@@ -152,20 +167,11 @@ def user_has_perm(user, perm_code: str, customer_id=None) -> bool:
         return False
 
     if _is_customer_scoped_perm(perm_code):
-        assigned_roles = _assigned_roles(user)
-
         if customer_id:
-            accessible_customer_ids = {str(x) for x in get_accessible_customer_ids(user)}
-            if str(customer_id) not in accessible_customer_ids:
-                return False
-
-            perms = _global_role_permissions(assigned_roles)
-            perms |= _scoped_role_permissions(user, assigned_roles, customer_id)
-            perms = expand_permissions(perms)
-            return "*" in perms or perm_code in perms
-
-        global_perms = expand_permissions(_global_role_permissions(assigned_roles))
-        return "*" in global_perms or perm_code in global_perms
+            return str(customer_id) in {
+                str(value) for value in get_permitted_customer_ids(user, perm_code)
+            }
+        return False
 
     perms = get_user_permissions(user, customer_id=None)
     return "*" in perms or perm_code in perms
@@ -183,7 +189,7 @@ def get_accessible_customer_ids(user):
     if cached is not None:
         return cached
 
-    if getattr(user, "is_staff", False):
+    if is_doko_admin(user):
         from .models import Customer
         result = list(Customer.objects.values_list("id", flat=True))
     else:
@@ -206,15 +212,38 @@ def get_accessible_customer_ids(user):
     return result
 
 
-def user_has_any_chat_access(user) -> bool:
+def get_permitted_customer_ids(user, perm_code: str):
     if not user or not getattr(user, "is_authenticated", False):
-        return False
+        return []
 
     if not getattr(user, "is_active", False):
-        return False
+        return []
 
-    if getattr(user, "is_staff", False):
-        return True
+    if is_doko_admin(user):
+        from .models import Customer
+        return list(Customer.objects.values_list("id", flat=True))
 
-    perms = get_user_permissions(user)
-    return any(code.startswith("chat.") for code in perms)
+    perm_code = str(perm_code or "").strip()
+    if not perm_code or not _is_customer_scoped_perm(perm_code):
+        return []
+
+    equivalent_codes = {perm_code}
+    if perm_code in {"task.view", "task.add"}:
+        equivalent_codes.add("task.manage")
+
+    assigned_roles = _assigned_roles(user)
+    permitted_roles = assigned_roles.filter(
+        permissions__code__in=equivalent_codes,
+    ).distinct()
+    if not permitted_roles.exists():
+        return []
+
+    direct_customer_ids = CustomerAccess.objects.filter(
+        user=user,
+    ).values_list("customer_id", flat=True)
+    role_customer_ids = CustomerAccess.objects.filter(
+        user__isnull=True,
+        role__in=permitted_roles,
+    ).values_list("customer_id", flat=True)
+
+    return list(set(direct_customer_ids) | set(role_customer_ids))

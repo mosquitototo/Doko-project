@@ -7,6 +7,9 @@ from django.utils.html import escape
 from django.utils.timezone import localtime
 from django.db.models import Model, QuerySet
 from django.db.models.manager import BaseManager
+from urllib.parse import urlparse
+from weasyprint import default_url_fetcher
+from weasyprint.urls import URLFetchingError
 
 
 def _format_date(value):
@@ -58,7 +61,22 @@ class TemplateObjectProxy:
         if not name or name.startswith("_"):
             raise AttributeError(name)
 
+        normalized = name.lower()
+        blocked_parts = (
+            "auth",
+            "cookie",
+            "credential",
+            "encrypted",
+            "password",
+            "secret",
+            "token",
+        )
+        if normalized == "raw" or any(part in normalized for part in blocked_parts):
+            raise AttributeError(name)
+
         value = getattr(self._obj, name)
+        if callable(value):
+            raise AttributeError(name)
         return _normalize_value(value)
 
     def __str__(self):
@@ -118,6 +136,12 @@ def render_report_html(template_html: str, context: dict) -> str:
     tpl = env.from_string(template_html)
     normalized_context = {k: _normalize_value(v) for k, v in context.items()}
     return tpl.render(**normalized_context)
+
+
+def safe_report_url_fetcher(url, *args, **kwargs):
+    if urlparse(url).scheme == "data":
+        return default_url_fetcher(url, *args, **kwargs)
+    raise URLFetchingError("External resources are disabled for report rendering")
 
 
 def default_context(case, **extras):

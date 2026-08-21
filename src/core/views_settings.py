@@ -1,6 +1,9 @@
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.sessions.models import Session
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils.encoding import force_bytes
@@ -14,8 +17,9 @@ from pathlib import Path
 import re
 import csv
 import io
+import ipaddress
 import json
-import requests
+import ssl
 
 from rest_framework import generics, status, permissions
 from rest_framework.permissions import IsAuthenticated
@@ -26,7 +30,6 @@ from rest_framework.exceptions import ValidationError, PermissionDenied
 
 from knox.models import AuthToken
 
-from .outbound_proxy import build_outbound_proxies
 from .celerysettings import *
 from .models import (
     Role,
@@ -41,6 +44,7 @@ from .models import (
     InvestigationTemplate,
     InstanceProxySettings,
     InstanceSplunkHecSettings,
+    InstanceSyslogSettings,
     InstanceBackup,
     AutomationRule,
     Severity,
@@ -51,10 +55,11 @@ from .models import (
 from .permissions import HasPermissionCode, CanManageInstanceSettings
 from .serializers import AuditLogSerializer
 from .serializers_chat import (AIProviderSerializer, SOARProviderSerializer, InvestigationTemplateSerializer,)
-from .rbac import user_has_perm
+from .rbac import user_has_perm, is_doko_admin
 from .audit import audit_event
 from .instance_backups import create_database_backup, restore_database_backup
 from .services_splunk_hec import test_splunk_hec_connection
+from .services_syslog import test_syslog_connection
 from .serializers_settings import (
     RoleSerializer,
     PermissionSerializer,
@@ -102,6 +107,23 @@ def _parse_bool(value):
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_user_password(password: str, user=None):
+    try:
+        validate_password(password, user=user)
+    except DjangoValidationError as exc:
+        raise ValidationError({"password": list(exc.messages)})
+
+
+def _revoke_user_authentication(user):
+    AuthToken.objects.filter(user=user).delete()
+    for session in Session.objects.all().iterator():
+        try:
+            if str(session.get_decoded().get("_auth_user_id")) == str(user.pk):
+                session.delete()
+        except Exception:
+            session.delete()
 
 
 MAX_API_TOKENS_PER_USER = 3
@@ -185,63 +207,90 @@ def _normalize_splunk_hec_payload(data):
     }
 
 
-def _test_splunk_hec_connection(payload):
-    endpoint = payload.get("endpoint", "").strip()
-    token = payload.get("token", "").strip()
-
-    if not endpoint:
-        return False, "Splunk HEC endpoint is required."
-    if not token:
-        return False, "Splunk HEC token is required."
-
-    headers = {
-        "Authorization": f"Splunk {token}",
-        "Content-Type": "application/json",
-    }
-
-    event_payload = {
-        "event": {
-            "message": "doko splunk hec connectivity test",
-            "kind": "connectivity_test",
-        },
-        "source": payload.get("source") or "doko:audit",
-        "sourcetype": payload.get("sourcetype") or "_json",
-    }
-
-    if payload.get("index"):
-        event_payload["index"] = payload["index"]
-
-    try:
-        response = requests.post(
-            endpoint,
-            headers=headers,
-            json=event_payload,
-            timeout=10,
-            proxies=build_outbound_proxies(),
-        )
-    except requests.RequestException as exc:
-        return False, f"Unable to reach Splunk HEC: {exc}"
-
-    if 200 <= response.status_code < 300:
-        return True, "Connection successful."
-
-    detail = ""
-    try:
-        body = response.json()
-        detail = body.get("text") or body.get("message") or ""
-    except Exception:
-        detail = (response.text or "").strip()
-
-    if detail:
-        return False, f"Splunk HEC rejected the request: {detail}"
-    return False, f"Splunk HEC rejected the request with status {response.status_code}."
-
-
 def _get_splunk_hec_settings():
     return InstanceSplunkHecSettings.get_solo().to_public_dict()
 
 
-###### reset pwd token
+def _normalize_syslog_payload(data):
+    if not hasattr(data, "get"):
+        data = {}
+
+    nested = data.get("syslog") or {}
+    if not isinstance(nested, dict):
+        nested = {}
+
+    def pick(key, default=""):
+        value = data.get(key, None)
+        if value not in (None, ""):
+            return value
+        value = nested.get(key, None)
+        if value not in (None, ""):
+            return value
+        return default
+
+    raw_port = pick("port", default=514)
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError):
+        port = 0
+
+    return {
+        "enabled": _parse_bool(pick("enabled", default=False)),
+        "host": str(pick("host")).strip(),
+        "port": port,
+        "protocol": str(pick("protocol", default=InstanceSyslogSettings.Protocol.UDP)).strip().lower(),
+        "format": str(pick("format", default=InstanceSyslogSettings.Format.RFC5424)).strip().lower(),
+        "ca_certificate": str(pick("ca_certificate")).strip(),
+    }
+
+
+def _validate_syslog_payload(payload, current: InstanceSyslogSettings | None = None):
+    host = payload["host"]
+    port = payload["port"]
+    protocol = payload["protocol"]
+    message_format = payload["format"]
+    ca_certificate = payload["ca_certificate"] or (current.ca_certificate if current else "")
+
+    if payload["enabled"] and not host:
+        return "Syslog host is required."
+    if host:
+        invalid_host = any(ch.isspace() for ch in host) or any(ch in host for ch in "/@[]")
+        if not invalid_host:
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                labels = host.rstrip(".").split(".")
+                invalid_host = (
+                    len(host) > 253
+                    or not all(
+                        re.fullmatch(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)", label)
+                        for label in labels
+                    )
+                )
+        if invalid_host:
+            return "Syslog host must be an IP address or FQDN without a scheme or port."
+    if port < 1 or port > 65535:
+        return "Syslog port must be between 1 and 65535."
+    if protocol not in InstanceSyslogSettings.Protocol.values:
+        return "Unsupported Syslog protocol."
+    if message_format not in InstanceSyslogSettings.Format.values:
+        return "Unsupported Syslog format."
+    if len(ca_certificate.encode("utf-8")) > 1_048_576:
+        return "Syslog CA certificate must not exceed 1 MB."
+    if payload["enabled"] and protocol == InstanceSyslogSettings.Protocol.TCP_TLS:
+        if not ca_certificate:
+            return "A CA certificate is required for TCP/TLS."
+        try:
+            ssl.create_default_context(cadata=ca_certificate)
+        except (ssl.SSLError, ValueError):
+            return "Invalid Syslog CA certificate."
+    return ""
+
+
+def _get_syslog_settings():
+    return InstanceSyslogSettings.get_solo().to_public_dict()
+
+
 token_generator = PasswordResetTokenGenerator()
 
 def _frontend_base_url(request) -> str:
@@ -282,7 +331,7 @@ class SettingsUserListCreateView(generics.ListCreateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
         } for u in qs[:500]]
         return Response({"results": data, "count": qs.count()})
 
@@ -301,6 +350,7 @@ class SettingsUserListCreateView(generics.ListCreateAPIView):
             return Response({"error": "username already exists"}, status=409)
 
         u = User(username=username, email=email, is_active=True)
+        _validate_user_password(password, user=u)
         u.set_password(password)
         u.save()
 
@@ -314,9 +364,8 @@ class SettingsUserListCreateView(generics.ListCreateAPIView):
             metadata={
                 "target_user_id": u.id,
                 "target_username": u.username,
-                "email": u.email,
                 "is_active": u.is_active,
-                "is_staff": u.is_staff,
+                "is_admin": is_doko_admin(u),
             },
         )
 
@@ -325,7 +374,7 @@ class SettingsUserListCreateView(generics.ListCreateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
         }, status=201)
 
 
@@ -349,24 +398,27 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
             "role_ids": role_ids,
         })
 
     def update(self, request, *args, **kwargs):
         u = self.get_object()
 
+        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can modify an administrator.")
+
         before = {
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
             "role_ids": list(UserRole.objects.filter(user=u).values_list("role_id", flat=True)),
         }
 
         username = request.data.get("username")
         email = request.data.get("email")
-        is_staff = request.data.get("is_staff")
+        is_admin = request.data.get("is_admin", request.data.get("is_staff"))
         is_active = request.data.get("is_active")
 
         role_ids = request.data.get("role_ids", None)
@@ -385,15 +437,15 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
         if email is not None:
             u.email = (email or "").strip()
 
-        if is_staff is not None:
+        if is_admin is not None:
             if not user_has_perm(request.user, "settings.instance.manage"):
-                raise PermissionDenied("Only instance managers can change staff status.")
+                raise PermissionDenied("Only instance managers can change administrator status.")
             if u.id == request.user.id:
-                raise PermissionDenied("You cannot change your own staff status.")
-            u.is_staff = bool(is_staff)
+                raise PermissionDenied("You cannot change your own administrator status.")
+            u.is_staff = _parse_bool(is_admin)
 
         if is_active is not None:
-            next_is_active = bool(is_active)
+            next_is_active = _parse_bool(is_active)
             if u.id == request.user.id and not next_is_active:
                 raise PermissionDenied("You cannot disable yourself.")
             u.is_active = next_is_active
@@ -417,6 +469,13 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             UserRole.objects.bulk_create([UserRole(user=u, role_id=rid) for rid in to_add])
 
         final_role_ids = list(UserRole.objects.filter(user=u).values_list("role_id", flat=True))
+        after = {
+            "username": u.username,
+            "email": u.email,
+            "is_active": u.is_active,
+            "is_admin": is_doko_admin(u),
+            "role_ids": final_role_ids,
+        }
 
         audit_event(
             request,
@@ -427,14 +486,7 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             metadata={
                 "target_user_id": u.id,
                 "target_username": u.username,
-                "before": before,
-                "after": {
-                    "username": u.username,
-                    "email": u.email,
-                    "is_active": u.is_active,
-                    "is_staff": u.is_staff,
-                    "role_ids": final_role_ids,
-                },
+                "changed_fields": sorted(key for key in before if before[key] != after[key]),
             },
         )
 
@@ -443,7 +495,7 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_staff": u.is_staff,
+            "is_admin": is_doko_admin(u),
             "role_ids": final_role_ids,
         })
 
@@ -454,15 +506,17 @@ class SettingsUserResetPasswordView(APIView):
 
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
-        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
+        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can reset admin passwords.")
         
         new_password = request.data.get("password") or ""
         if not new_password:
             return Response({"error": "password is required"}, status=400)
 
+        _validate_user_password(new_password, user=u)
         u.set_password(new_password)
         u.save(update_fields=["password"])
+        _revoke_user_authentication(u)
 
         audit_event(
             request,
@@ -485,6 +539,9 @@ class SettingsUserPasswordResetLinkView(APIView):
 
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
+
+        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can generate admin reset links.")
 
         if not u.is_active:
             return Response({"error": "user is inactive"}, status=400)
@@ -519,7 +576,7 @@ class SettingsUserPasswordResetLinkView(APIView):
         )
     
 
-class SettingsUserDisableView(APIView):
+class SettingsUserDeleteView(APIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "settings.access.users.delete"
 
@@ -527,28 +584,30 @@ class SettingsUserDisableView(APIView):
         u = generics.get_object_or_404(User, pk=pk)
 
         if u.id == request.user.id:
-            return Response({"error": "cannot disable yourself"}, status=400)
+            return Response({"error": "cannot delete yourself"}, status=400)
         
-        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
-            raise PermissionDenied("Only instance managers can disable staff users.")
+        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can delete administrators.")
 
-        u.is_active = False
-        u.save(update_fields=["is_active"])
+        target_id = u.id
+        target_username = u.username
+        was_admin = is_doko_admin(u)
+        u.delete()
 
         audit_event(
             request,
-            action="settings.user.disabled",
+            action="settings.user.deleted",
             object_type="user",
-            object_id=str(u.id),
-            object_repr=u.username or "",
+            object_id=str(target_id),
+            object_repr=target_username or "",
             metadata={
-                "target_user_id": u.id,
-                "target_username": u.username,
-                "is_active": u.is_active,
+                "target_user_id": target_id,
+                "target_username": target_username,
+                "is_admin": was_admin,
             },
         )
 
-        return Response({"info": "user disabled"}, status=200)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class SettingsUserApiTokenListCreateView(APIView):
@@ -558,12 +617,18 @@ class SettingsUserApiTokenListCreateView(APIView):
     def get(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
 
+        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can view administrator tokens.")
+
         tokens = AuthToken.objects.filter(user=u).order_by("-created")
         data = SettingsUserApiTokenSerializer(tokens, many=True).data
         return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
+
+        if not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can issue tokens for other users.")
 
         if _api_token_limit_reached(u):
             return _token_limit_response()
@@ -579,26 +644,18 @@ class SettingsUserApiTokenListCreateView(APIView):
             token_instance.expiry = None if never_expire else expiry
             token_instance.save(update_fields=["expiry"])
 
-        try:
-            AuditLog.objects.create(
-                actor=request.user,
-                actor_username=(getattr(request.user, "username", "") or "")[:160],
-                action="settings.user.api_token.create",
-                success=True,
-                status_code=201,
-                object_type="auth_token",
-                object_id=(token_instance.token_key or "")[:80],
-                object_repr=(token_instance.token_key or "")[:255],
-                metadata={
-                    "target_user_id": u.id,
-                    "target_username": u.username,
-                    "token_key": token_instance.token_key,
-                    "expiry": token_instance.expiry.isoformat() if token_instance.expiry else None,
-                    "never_expire": bool(never_expire),
-                },
-            )
-        except Exception:
-            pass
+        audit_event(
+            request,
+            action="settings.user.api_token.created",
+            object_type="auth_token",
+            object_id=str(u.id),
+            status_code=201,
+            metadata={
+                "target_user_id": u.id,
+                "expiry": token_instance.expiry.isoformat() if token_instance.expiry else None,
+                "never_expire": bool(never_expire),
+            },
+        )
 
         return Response(
             {
@@ -619,34 +676,23 @@ class SettingsUserApiTokenRevokeView(APIView):
     def post(self, request, pk: int, token_key: str):
         u = generics.get_object_or_404(User, pk=pk)
 
+        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can revoke administrator tokens.")
+
         token_instance = AuthToken.objects.filter(user=u, token_key=token_key).first()
         if not token_instance:
             return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        token_key = token_instance.token_key
-        object_id = (token_key or "")[:80]
-        object_repr = (token_key or "")[:255]
-
         token_instance.delete()
 
-        try:
-            AuditLog.objects.create(
-                actor=request.user,
-                actor_username=(getattr(request.user, "username", "") or "")[:160],
-                action="settings.user.api_token.revoke",
-                success=True,
-                status_code=204,
-                object_type="auth_token",
-                object_id=object_id,
-                object_repr=object_repr,
-                metadata={
-                    "target_user_id": u.id,
-                    "target_username": u.username,
-                    "token_key": token_key,
-                },
-            )
-        except Exception:
-            pass
+        audit_event(
+            request,
+            action="settings.user.api_token.revoked",
+            object_type="auth_token",
+            object_id=str(u.id),
+            status_code=204,
+            metadata={"target_user_id": u.id},
+        )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
     
@@ -1026,6 +1072,8 @@ class AutomationRuleMetadataView(APIView):
                     {"value": "case.created", "label": "Case created", "scopes": ["case"]},
                     {"value": "case.updated", "label": "Case updated", "scopes": ["case"]},
                     {"value": "case.created_from_alert_escalation", "label": "Case created from alert escalation", "scopes": ["case"]},
+                    {"value": "case.alert_linked", "label": "Alert linked to case", "scopes": ["case"]},
+                    {"value": "case.alert_unmerged", "label": "Alert unmerged from case", "scopes": ["case"]},
                     {"value": "case.ioc_added", "label": "IoC added to case", "scopes": ["case"]},
                     {"value": "case.asset_added", "label": "Asset added to case", "scopes": ["case"]},
                     {"value": "case.exchange_inbound_received", "label": "Inbound Exchange received", "scopes": ["case"]},
@@ -1488,6 +1536,7 @@ class InstanceSettingsView(APIView):
     def get(self, request):
         last_backup = InstanceBackup.objects.order_by("-created_at").first()
         splunk_hec = _get_splunk_hec_settings()
+        syslog = _get_syslog_settings()
         proxy = InstanceProxySettings.get_solo()
 
         return Response(
@@ -1501,6 +1550,7 @@ class InstanceSettingsView(APIView):
                     "source": splunk_hec.get("source", "doko:audit") or "doko:audit",
                     "sourcetype": splunk_hec.get("sourcetype", "_json") or "_json",
                 },
+                "syslog": syslog,
                 "last_backup": InstanceBackupSerializer(last_backup).data if last_backup else None,
                 "last_backup_file": last_backup.filename if last_backup else "",
                 "last_audit_export_file": "",
@@ -1750,7 +1800,69 @@ class InstanceSplunkHecTestView(APIView):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
-    
+
+
+class InstanceSyslogSettingsView(APIView):
+    permission_classes = [CanManageInstanceSettings]
+
+    def post(self, request):
+        return self._save(request)
+
+    def put(self, request):
+        return self._save(request)
+
+    def _save(self, request):
+        payload = _normalize_syslog_payload(request.data or {})
+        obj = InstanceSyslogSettings.get_solo()
+        validation_error = _validate_syslog_payload(payload, obj)
+        if validation_error:
+            return Response({"detail": validation_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        before = obj.to_public_dict()
+        obj.enabled = payload["enabled"]
+        obj.host = payload["host"]
+        obj.port = payload["port"]
+        obj.protocol = payload["protocol"]
+        obj.message_format = payload["format"]
+        obj.updated_by = request.user
+        if payload["ca_certificate"]:
+            obj.ca_certificate = payload["ca_certificate"]
+        obj.save()
+
+        audit_event(
+            request,
+            action="settings.instance.syslog.updated",
+            object_type="instance_syslog_settings",
+            object_id=str(obj.id),
+            object_repr="Syslog settings",
+            metadata={"before": before, "after": obj.to_public_dict()},
+        )
+        return Response(obj.to_public_dict(), status=status.HTTP_200_OK)
+
+
+class InstanceSyslogTestView(APIView):
+    permission_classes = [CanManageInstanceSettings]
+
+    def post(self, request):
+        payload = _normalize_syslog_payload(request.data or {})
+        obj = InstanceSyslogSettings.get_solo()
+
+        if not payload["host"]:
+            payload["host"] = obj.host or ""
+        if not payload["ca_certificate"]:
+            payload["ca_certificate"] = obj.ca_certificate or ""
+
+        payload["enabled"] = True
+        validation_error = _validate_syslog_payload(payload, obj)
+        if validation_error:
+            return Response({"ok": False, "detail": validation_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        ok, detail = test_syslog_connection(payload)
+        return Response(
+            {"ok": ok, "detail": detail},
+            status=status.HTTP_200_OK if ok else status.HTTP_400_BAD_REQUEST,
+        )
+
 
 class InstanceBackupCreateView(APIView):
     permission_classes = [CanManageInstanceSettings]

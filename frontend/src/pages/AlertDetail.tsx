@@ -431,7 +431,7 @@ export default function AlertDetail() {
   const { push } = useToast();
 
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canMerge = can("alert.merge") || can("alert.escalate");
   const canUpdate = can("alert.update");
   const canDelete = can("alert.delete");

@@ -135,7 +135,7 @@ export default function CaseSummaryTab(props: Props) {
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-foreground">Investigation</div>
-                <div className="text-xs text-muted-foreground">Notes, decisions and analyst context</div>
+                <div className="text-xs text-muted-foreground">Notes, decisions and case context</div>
               </div>
             </div>
 

@@ -6,6 +6,7 @@ from typing import Any
 import requests
 from django.utils import timezone
 
+from .audit import sanitize_audit_metadata
 from .models import AuditLog, InstanceSplunkHecSettings
 from .outbound_proxy import build_outbound_proxies
 
@@ -36,7 +37,6 @@ def build_audit_log_hec_payload(audit_log: AuditLog, settings_obj: InstanceSplun
         "action": audit_log.action or "",
         "object_type": audit_log.object_type or "",
         "object_id": audit_log.object_id or "",
-        "object_repr": audit_log.object_repr or "",
         "success": bool(audit_log.success),
         "status_code": audit_log.status_code,
         "ip_address": audit_log.ip_address or "",
@@ -45,7 +45,7 @@ def build_audit_log_hec_payload(audit_log: AuditLog, settings_obj: InstanceSplun
         "path": audit_log.path or "",
         "request_id": str(audit_log.request_id) if audit_log.request_id else "",
         "duration_ms": audit_log.duration_ms,
-        "metadata": audit_log.metadata or {},
+        "metadata": sanitize_audit_metadata(audit_log.metadata or {}),
         "application": "doko",
         "event_kind": "audit",
     }
@@ -77,16 +77,19 @@ def send_payload_to_splunk_hec(settings_obj: InstanceSplunkHecSettings, payload:
     if not token:
         raise SplunkHecError("Splunk HEC token is required.")
 
-    response = requests.post(
-        endpoint,
-        headers={
-            "Authorization": f"Splunk {token}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=10,
-        proxies=build_outbound_proxies(),
-    )
+    try:
+        response = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Splunk {token}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=10,
+            proxies=build_outbound_proxies(),
+        )
+    except requests.RequestException as exc:
+        raise SplunkHecError("Unable to reach Splunk HEC.") from exc
 
     if 200 <= response.status_code < 300:
         return

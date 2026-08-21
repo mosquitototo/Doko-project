@@ -204,6 +204,7 @@ class SOARProviderSerializer(serializers.ModelSerializer):
             "request_config",
             "response_config",
             "status_config",
+            "verify_ssl",
             "timeout_seconds",
             "is_enabled",
             "api_key",
@@ -217,6 +218,11 @@ class SOARProviderSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         is_create = self.instance is None
+
+        for field in ("auth_config", "request_config", "response_config", "status_config"):
+            value = attrs.get(field, getattr(self.instance, field, {}) if self.instance else {})
+            if not isinstance(value, dict):
+                raise serializers.ValidationError({field: "Expected a JSON object."})
 
         if is_create:
             if not attrs.get("provider_kind"):
@@ -368,6 +374,7 @@ class InvestigationTemplateSerializer(serializers.ModelSerializer):
             "output_mapping",
             "status_mapping",
             "execution_config",
+            "execution_mode",
             "max_time_range_hours",
             "risk_level",
             "is_enabled",
@@ -383,6 +390,19 @@ class InvestigationTemplateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         is_create = self.instance is None
+
+        for field in (
+            "default_variables",
+            "allowed_variables_schema",
+            "prompt_overrides_schema",
+            "input_mapping",
+            "output_mapping",
+            "status_mapping",
+            "execution_config",
+        ):
+            value = attrs.get(field, getattr(self.instance, field, {}) if self.instance else {})
+            if not isinstance(value, dict):
+                raise serializers.ValidationError({field: "Expected a JSON object."})
 
         name = (attrs.get("name") or getattr(self.instance, "name", "") or "").strip()
         code = (attrs.get("code") or getattr(self.instance, "code", "") or "").strip()
@@ -640,7 +660,12 @@ class ChatRunSerializer(serializers.ModelSerializer):
 
 
 class ChatSessionSerializer(serializers.ModelSerializer):
-    messages = ChatMessageSerializer(many=True, read_only=True)
+    messages = serializers.SerializerMethodField()
+
+    def get_messages(self, obj):
+        messages = list(obj.messages.order_by("-created_at")[:100])
+        messages.reverse()
+        return ChatMessageSerializer(messages, many=True).data
 
     class Meta:
         model = ChatSession

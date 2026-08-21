@@ -1517,6 +1517,7 @@ export default function Tasks() {
                     onChange={(v) => setDraftCustomerIds(v)}
                     placeholder="-"
                     widthClass="w-full"
+                    portal
                 />
                 </div>
             </div>

@@ -1,16 +1,18 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:a116514e19457bcb7af7efe9c3dd0b9b71e85b317694e7882a1c52aa15a78134
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
+ENV PIP_ONLY_BINARY=:all:
 
 WORKDIR /app
-COPY ./src /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libssl-dev \
     libffi-dev \
     pkg-config \
+    gosu \
     curl \
     ca-certificates \
     lsb-release \
@@ -38,13 +40,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir pip==26.2.1
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY requirements-lock.txt /tmp/requirements-lock.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-lock.txt
 RUN python -c "import cryptography; print('cryptography OK')"
 
-COPY ./docker/web/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY ./src /app
 
+COPY ./docker/web/entrypoint.sh /entrypoint.sh
+COPY ./docker/web/drop-privileges.sh /drop-privileges.sh
+RUN groupadd --system doko \
+    && useradd --system --gid doko --home-dir /app --shell /usr/sbin/nologin doko \
+    && mkdir -p /app/media /app/staticfiles /app/celerybeat \
+    && chown -R doko:doko /app /entrypoint.sh /drop-privileges.sh \
+    && chmod +x /entrypoint.sh /drop-privileges.sh
+
+ENTRYPOINT ["/drop-privileges.sh"]
 CMD ["/entrypoint.sh"]

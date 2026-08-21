@@ -1,10 +1,11 @@
 import { Navigate, Outlet, useLocation } from "react-router-dom";
-import { useEffect, useCallback, useState } from "react";
+import { lazy, Suspense, useEffect, useCallback, useState } from "react";
 import { fetchMe, type Me } from "../../api/me";
 import Sidebar from "./Sidebar";
 import { MeContext } from "../../contexts/MeContext";
-import GlobalChatDrawer from "../../components/chat/GlobalChatDrawer";
 import { ThemeProvider } from "../theme/ThemeProvider";
+
+const GlobalChatDrawer = lazy(() => import("../../components/chat/GlobalChatDrawer"));
 
 function ShellLayout() {
   const [me, setMe] = useState<Me | null>(null);
@@ -12,13 +13,14 @@ function ShellLayout() {
   const [authFailed, setAuthFailed] = useState(false);
   const location = useLocation();
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatLoaded, setChatLoaded] = useState(false);
 
   const hideChat =
     location.pathname.startsWith("/login") ||
     location.pathname.startsWith("/setup");
 
   const canUseChat =
-    !!me?.is_staff || !!me?.permissions?.includes("chat.use");
+    !!me?.is_admin || !!me?.permissions?.includes("chat.use");
 
   const reloadMe = useCallback(async () => {
     try {
@@ -50,6 +52,7 @@ function ShellLayout() {
           me={me}
           onOpenGlobalChat={() => {
             if (canUseChat) {
+              setChatLoaded(true);
               setChatOpen(true);
             }
           }}
@@ -64,11 +67,13 @@ function ShellLayout() {
             </div>
           </main>
 
-          {!hideChat && canUseChat ? (
-            <GlobalChatDrawer
-              open={chatOpen}
-              onClose={() => setChatOpen(false)}
-            />
+          {!hideChat && canUseChat && chatLoaded ? (
+            <Suspense fallback={null}>
+              <GlobalChatDrawer
+                open={chatOpen}
+                onClose={() => setChatOpen(false)}
+              />
+            </Suspense>
           ) : null}
         </div>
       </div>

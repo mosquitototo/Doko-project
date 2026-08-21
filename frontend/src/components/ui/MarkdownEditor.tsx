@@ -315,6 +315,11 @@ export default function MarkdownEditor(props: Props) {
           color: hsl(var(--foreground));
         }
 
+        .markdown-editor .mdxeditor [contenteditable],
+        .markdown-rendered-content .mdxeditor [contenteditable] {
+          color: inherit;
+        }
+
         .markdown-editor ul,
         .markdown-rendered-content ul {
           list-style-type: disc;

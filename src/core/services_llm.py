@@ -1,5 +1,6 @@
 import requests
 import logging
+import json
 
 from django.core.exceptions import ValidationError
 
@@ -34,7 +35,6 @@ def _build_chat_completions_url(base_url: str) -> str:
 class LLMService:
     def __init__(self, provider: AIProvider):
         self.provider = provider
-        self.last_response_preview = ""
         validate_provider_url(provider.base_url)
 
     def generate(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -70,47 +70,41 @@ class LLMService:
                 },
                 timeout=self.provider.timeout_seconds,
                 proxies=build_outbound_proxies(),
+                stream=True,
             )
-
-            self.last_response_preview = response.text[:2000]
-
             logger.debug("LLM response status: %s", response.status_code)
-            print("DOKO_LLM_RESPONSE_STATUS:", response.status_code)
-
             response.raise_for_status()
 
-            payload = response.json()
+            chunks = []
+            size = 0
+            for chunk in response.iter_content(chunk_size=65536):
+                size += len(chunk)
+                if size > 2 * 1024 * 1024:
+                    raise ValidationError("LLM response is too large")
+                chunks.append(chunk)
+
+            payload = json.loads(b"".join(chunks))
             content = payload["choices"][0]["message"]["content"].strip()
-            self.last_response_preview = content[:2000]
 
             return content
 
         except requests.RequestException as exc:
             error_response = response or getattr(exc, "response", None)
             status_code = getattr(error_response, "status_code", "no_response")
-            body_preview = (getattr(error_response, "text", "") or "")[:2000]
-
             logger.warning(
-                "LLM request failed: status=%s error=%s body_preview=%s",
+                "LLM request failed: status=%s error_type=%s",
                 status_code,
-                exc,
-                body_preview,
+                type(exc).__name__,
             )
-
-            self.last_response_preview = body_preview
-            raise ValidationError(
-                f"LLM request failed: {exc}. Response preview: {body_preview}"
-            ) from exc
+            raise ValidationError("LLM provider request failed") from exc
 
         except (KeyError, IndexError, TypeError, ValueError) as exc:
-            body_preview = (getattr(response, "text", "") or "")[:2000]
-
             logger.warning(
-                "LLM response parsing failed: status=%s error=%s body_preview=%s",
+                "LLM response parsing failed: status=%s error_type=%s",
                 getattr(response, "status_code", "no_response"),
-                exc,
-                body_preview,
+                type(exc).__name__,
             )
-
-            self.last_response_preview = body_preview
             raise ValidationError("LLM response format is invalid") from exc
+        finally:
+            if response is not None:
+                response.close()

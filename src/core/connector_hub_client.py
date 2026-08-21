@@ -4,6 +4,7 @@ import json
 import time
 import ipaddress
 import socket
+import secrets
 from urllib.parse import urlparse
 import requests
 
@@ -47,8 +48,8 @@ def validate_external_base_url(base_url: str) -> str:
 # HMAC signing
 # ----------------------------
 
-def _sign(secret: str, body: bytes, ts: str) -> str:
-    msg = ts.encode("utf-8") + b"." + body
+def _sign(secret: str, body: bytes, ts: str, nonce: str) -> str:
+    msg = ts.encode("utf-8") + b"." + nonce.encode("utf-8") + b"." + body
     return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
@@ -74,12 +75,14 @@ def run_hub_request(*, hub_url: str, secret: str, path: str, timeout_ms: int, pa
     url = _join_url(hub_url, path)
 
     ts = str(int(time.time()))
+    nonce = secrets.token_urlsafe(24)
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    sig = _sign(secret, body, ts) if secret else ""
+    sig = _sign(secret, body, ts, nonce) if secret else ""
 
     headers = {
         "Content-Type": "application/json",
         "X-Doko-Timestamp": ts,
+        "X-Doko-Nonce": nonce,
     }
     if sig:
         headers["X-Doko-Signature"] = sig

@@ -34,7 +34,7 @@ import {
   fetchTickets,
   createTicket,
   updateTicket,
-  type EventListItem,
+  type CaseListItem,
 } from "../api/cases";
 import {
   DeleteButton,
@@ -256,7 +256,7 @@ export default function HuntDetailPage() {
   const navigate = useNavigate();
   const { push } = useToast();
   const me = useMe();
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
 
   const canManageHunt = can("hunt.manage");
   const canViewCases = can("case.view");
@@ -273,7 +273,7 @@ export default function HuntDetailPage() {
   const huntTitleRef = useRef<HTMLDivElement | null>(null);
   const [users, setUsers] = useState<UserLite[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [cases, setCases] = useState<EventListItem[]>([]);
+  const [cases, setCases] = useState<CaseListItem[]>([]);
   const [journal, setJournal] = useState<HuntJournalEntry[]>([]);
   const [caseLinks, setCaseLinks] = useState<HuntCaseLink[]>([]);
   const [timeline, setTimeline] = useState<HuntTimelineItem[]>([]);

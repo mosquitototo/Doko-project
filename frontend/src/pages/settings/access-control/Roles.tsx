@@ -29,7 +29,7 @@ export default function SettingsRoles() {
 
   const me = useMe();
 
-  const can = (p: string) => !!me?.is_staff || !!me?.permissions?.includes(p);
+  const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canView = can("settings.access.roles.view");
   const canManage = can("settings.access.roles.manage");
   const canDelete = can("settings.access.roles.delete");

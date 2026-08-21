@@ -38,7 +38,7 @@ class Alert(models.Model):
         NA = "not_applicable", "Not applicable"
         UKN = "unknown", "Unknown"
 
-    case = models.ForeignKey("core.Event", null=True, blank=True, on_delete=models.SET_NULL, related_name="alerts",)
+    case = models.ForeignKey("core.Case", null=True, blank=True, on_delete=models.SET_NULL, related_name="alerts",)
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
@@ -94,7 +94,7 @@ class AlertComment(models.Model):
 ##############
 ## Cases
 ##############
-class Event(models.Model):
+class Case(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     case_number = models.PositiveIntegerField(unique=True, null=True, blank=True, db_index=True)
     owner = models.ForeignKey(
@@ -102,11 +102,11 @@ class Event(models.Model):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="events",
+        related_name="cases",
     )
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    members = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="events_shared")
+    members = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="cases_shared")
     is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     archived_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -122,7 +122,7 @@ class Event(models.Model):
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name="events_auto_followup",
+        related_name="cases_auto_followup",
     )
 
     class AutoFollowupAction(models.TextChoices):
@@ -163,9 +163,12 @@ class Event(models.Model):
     outcome = models.CharField(max_length=50, choices=Outcome.choices, default=Outcome.UKN, db_index=True,)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
-    customer = models.ForeignKey("core.Customer", null=True, blank=True, on_delete=models.PROTECT, related_name="events")
+    customer = models.ForeignKey("core.Customer", null=True, blank=True, on_delete=models.PROTECT, related_name="cases")
     iocs = models.JSONField(default=list, blank=True)
     assets = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        db_table = "core_event"
 
     @property
     def customer_name(self):
@@ -212,8 +215,8 @@ class Event(models.Model):
 
 
 class CaseUserState(models.Model):
-    event = models.ForeignKey(
-        "Event",
+    case = models.ForeignKey(
+        "Case",
         on_delete=models.CASCADE,
         related_name="user_states",
     )
@@ -225,7 +228,7 @@ class CaseUserState(models.Model):
     last_viewed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
-        unique_together = [("event", "user")]
+        unique_together = [("case", "user")]
         indexes = [
             models.Index(fields=["user", "last_viewed_at"]),
         ]
@@ -283,7 +286,7 @@ class CaseRetentionSettings(models.Model):
 #### Case activity
 class TimelineItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="timeline_items",)
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="timeline_items",)
     date = models.DateField(db_index=True)
     type = models.CharField(max_length=50, default="note")
     text = models.TextField()
@@ -296,13 +299,13 @@ class TimelineItem(models.Model):
         ordering = ["date", "created_at"]
 
     def __str__(self) -> str:
-        return f"Event {self.event_id} - {self.date} - {self.type}"
+        return f"Case {self.case_id} - {self.date} - {self.type}"
 
 
 #### Case comments
 class Comment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="comments",)
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="comments",)
     author = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="comments",)
     author_label = models.CharField(max_length=255, blank=True, default="")
     text = models.TextField()
@@ -314,12 +317,12 @@ class Comment(models.Model):
 
     def __str__(self) -> str:
         author = self.author.username if self.author else (self.author_label or "unknown")
-        return f"{author} on {self.event_id}"
+        return f"{author} on {self.case_id}"
 
 
 #### Case attachments
 def case_attachment_upload_to(instance, filename):
-    case_id = str(getattr(instance, "event_id", "") or "unassigned")
+    case_id = str(getattr(instance, "case_id", "") or "unassigned")
     attachment_id = str(getattr(instance, "id", "") or uuid.uuid4())
     suffix = PurePath(filename or "").suffix.lower()
 
@@ -331,7 +334,7 @@ def case_attachment_upload_to(instance, filename):
 
 class Attachment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="attachments",)
+    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="attachments",)
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="attachments",)
     file = models.FileField(upload_to=case_attachment_upload_to)
     original_name = models.CharField(max_length=255, blank=True)
@@ -355,7 +358,7 @@ class CaseExchange(models.Model):
         OTHER = "other", "Other"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    case = models.ForeignKey("core.Event", on_delete=models.CASCADE, related_name="exchanges", db_index=True)
+    case = models.ForeignKey("core.Case", on_delete=models.CASCADE, related_name="exchanges", db_index=True)
 
     direction = models.CharField(max_length=20, choices=Direction.choices, db_index=True)
     channel = models.CharField(max_length=20, choices=Channel.choices, default=Channel.EMAIL, db_index=True)
@@ -536,7 +539,35 @@ def queue_audit_log_splunk_hec_export(sender, instance: AuditLog, created: bool,
     transaction.on_commit(enqueue)
 
 
-### 1y
+@receiver(post_save, sender=AuditLog)
+def queue_audit_log_syslog_export(sender, instance: AuditLog, created: bool, **kwargs):
+    if not created:
+        return
+
+    audit_log_id = str(instance.id)
+
+    def enqueue():
+        try:
+            enabled = InstanceSyslogSettings.objects.filter(
+                id=1,
+                enabled=True,
+            ).exists()
+
+            if not enabled:
+                return
+
+            from .celerytasks import send_audit_log_to_syslog_task
+
+            send_audit_log_to_syslog_task.apply_async(
+                args=[audit_log_id],
+                retry=False,
+            )
+        except Exception:
+            pass
+
+    transaction.on_commit(enqueue)
+
+
 class AuditLogRetentionSettings(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     max_days = models.PositiveIntegerField(default=365)
@@ -727,8 +758,8 @@ class WorkbookTemplateItem(models.Model):
 
 
 class WorkbookInstance(models.Model):
-    event = models.OneToOneField(
-        Event,
+    case = models.OneToOneField(
+        Case,
         related_name="workbook_instance",
         on_delete=models.CASCADE,
     )
@@ -741,7 +772,7 @@ class WorkbookInstance(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-            return f"Workbook for event {self.event_id}"
+            return f"Workbook for case {self.case_id}"
 
 
 class WorkbookInstanceItem(models.Model):
@@ -790,7 +821,7 @@ def report_upload_to(instance, filename):
 class ReportInstance(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    case = models.ForeignKey("Event", on_delete=models.CASCADE, related_name="reports")
+    case = models.ForeignKey("Case", on_delete=models.CASCADE, related_name="reports")
     template = models.ForeignKey(ReportTemplate, null=True, blank=True, on_delete=models.SET_NULL, related_name="reports")
 
     template_name = models.CharField(max_length=120, blank=True, default="")
@@ -818,7 +849,7 @@ class IncidentTimelineItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     case = models.ForeignKey(
-        "core.Event",
+        "core.Case",
         on_delete=models.CASCADE,
         related_name="incident_timeline_items",
         db_index=True,
@@ -914,7 +945,7 @@ class ActionRun(models.Model):
 class ConnectorResult(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    case = models.ForeignKey("core.Event", on_delete=models.CASCADE, related_name="connector_results")
+    case = models.ForeignKey("core.Case", on_delete=models.CASCADE, related_name="connector_results")
     instance = models.ForeignKey("core.ConnectorInstance", null=True, blank=True, on_delete=models.CASCADE, related_name="results")
     endpoint = models.ForeignKey("core.ConnectorEndpoint", null=True, blank=True, on_delete=models.SET_NULL, related_name="results")
 
@@ -999,6 +1030,7 @@ class ConnectorEndpoint(models.Model):
     path_template = models.CharField(max_length=500, default="")
 
     headers_text = models.TextField(blank=True, default="{}")
+    body_template = models.JSONField(null=True, blank=True, default=None)
 
     timeout_ms = models.PositiveIntegerField(default=8000)
     is_enabled = models.BooleanField(default=True)
@@ -1129,10 +1161,6 @@ class Hunt(models.Model):
     def customer_name(self):
         return self.customer.name if self.customer else None
 
-    #@property
-    #def customer_id(self):
-    #    return self.customer.id if self.customer else None
-
     @property
     def owner_username(self):
         return self.owner.username if self.owner_id else None
@@ -1191,7 +1219,7 @@ class HuntCaseLink(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     hunt = models.ForeignKey("core.Hunt", on_delete=models.CASCADE, related_name="case_links", db_index=True)
-    case = models.ForeignKey("core.Event", on_delete=models.CASCADE, related_name="hunt_links", db_index=True)
+    case = models.ForeignKey("core.Case", on_delete=models.CASCADE, related_name="hunt_links", db_index=True)
     link_type = models.CharField(max_length=30, choices=LinkType.choices, default=LinkType.RELATED, db_index=True)
 
     created_by = models.ForeignKey(
@@ -1794,6 +1822,52 @@ class InstanceSplunkHecSettings(models.Model):
         return f"InstanceSplunkHecSettings(enabled={self.enabled}, endpoint={self.endpoint})"
 
 
+class InstanceSyslogSettings(models.Model):
+    class Protocol(models.TextChoices):
+        UDP = "udp", "UDP"
+        TCP = "tcp", "TCP"
+        TCP_TLS = "tcp_tls", "TCP/TLS"
+
+    class Format(models.TextChoices):
+        RFC5424 = "rfc5424", "RFC 5424"
+        RFC3164 = "rfc3164", "RFC 3164"
+        CEF = "cef", "CEF"
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    enabled = models.BooleanField(default=False)
+    host = models.CharField(max_length=255, blank=True, default="")
+    port = models.PositiveIntegerField(default=514)
+    protocol = models.CharField(max_length=12, choices=Protocol.choices, default=Protocol.UDP)
+    message_format = models.CharField(max_length=12, choices=Format.choices, default=Format.RFC5424)
+    ca_certificate = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="instance_syslog_settings_updates",
+    )
+
+    @classmethod
+    def get_solo(cls):
+        obj, _ = cls.objects.get_or_create(id=1)
+        return obj
+
+    def to_public_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "host": self.host or "",
+            "port": self.port,
+            "protocol": self.protocol,
+            "format": self.message_format,
+            "has_ca_certificate": bool(self.ca_certificate),
+        }
+
+    def __str__(self):
+        return f"InstanceSyslogSettings(enabled={self.enabled}, host={self.host}, port={self.port})"
+
+
 class InstanceBackup(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     filename = models.CharField(max_length=255, unique=True)
@@ -1924,7 +1998,7 @@ class TaskCaseLink(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     task = models.ForeignKey("core.Task", on_delete=models.CASCADE, related_name="case_links")
-    case = models.ForeignKey("core.Event", on_delete=models.CASCADE, related_name="task_links")
+    case = models.ForeignKey("core.Case", on_delete=models.CASCADE, related_name="task_links")
 
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
