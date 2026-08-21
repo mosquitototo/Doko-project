@@ -13,14 +13,12 @@
 </p>
 
 <p align="center">
-  <img width="1194" alt="Doko dashboard" src="https://github.com/user-attachments/assets/1d161c18-8b63-42a4-86e5-4b97eb6cb0d2">
+  <img width="180" alt="Doko" src="frontend/public/Doko_logo_small.png">
 </p>
 
 ## About Doko
 
 Doko brings alerts, cases, hunts, tasks and investigation data into one web application. It supports structured workflows, granular access control, external connectors, automation rules, case reports and an optional AI assistant backed by an internal or external OpenAI-compatible endpoint.
-
-The application is distributed as a Docker Compose stack and can be configured from a single environment file. Database migrations and reference-data updates run automatically when the web service starts.
 
 Doko is built with passion by developers and elevated by controlled AI assistance.
 
@@ -54,6 +52,10 @@ Doko is built with passion by developers and elevated by controlled AI assistanc
 - Case report templates with PDF generation
 
 ## Screenshots
+
+### Dashboard
+
+<img width="1194" alt="Doko dashboard" src="https://github.com/user-attachments/assets/1d161c18-8b63-42a4-86e5-4b97eb6cb0d2">
 
 ### Cases
 
