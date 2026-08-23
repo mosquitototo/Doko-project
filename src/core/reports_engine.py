@@ -8,8 +8,6 @@ from django.utils.timezone import localtime
 from django.db.models import Model, QuerySet
 from django.db.models.manager import BaseManager
 from urllib.parse import urlparse
-from weasyprint import default_url_fetcher
-from weasyprint.urls import URLFetchingError
 
 
 def _format_date(value):
@@ -139,6 +137,9 @@ def render_report_html(template_html: str, context: dict) -> str:
 
 
 def safe_report_url_fetcher(url, *args, **kwargs):
+    from weasyprint import default_url_fetcher
+    from weasyprint.urls import URLFetchingError
+
     if urlparse(url).scheme == "data":
         return default_url_fetcher(url, *args, **kwargs)
     raise URLFetchingError("External resources are disabled for report rendering")
