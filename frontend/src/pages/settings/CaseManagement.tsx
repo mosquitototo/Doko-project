@@ -244,6 +244,8 @@ export default function SettingsCaseManagement() {
     );
   }, [qpSelected, qpIsDraftNew, qpName, qpDescription, qpIsActive, qpBody]);
 
+  const qpEditorEnabled = qpIsDraftNew || qpSelectedId !== null;
+
   const qpDraftListItem = useMemo<CaseExchangeQuickpart | null>(() => {
     if (!qpIsDraftNew) return null;
     return {
@@ -797,14 +799,20 @@ export default function SettingsCaseManagement() {
               )}
             </Card>
 
-            <Card className="p-5">
+            <Card
+              className={[
+                "p-5",
+                qpEditorEnabled ? "" : "opacity-60",
+              ].join(" ")}
+              aria-disabled={!qpEditorEnabled}
+            >
               <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div className="min-w-0">
                   <div className="flex items-center gap-3">
                     <div className="text-sm font-semibold text-foreground">
                       Quickpart editor
                     </div>
-                    {!qpIsDraftNew ? <StatusPill active={qpIsActive} /> : null}
+                    {qpSelectedId ? <StatusPill active={qpIsActive} /> : null}
                   </div>
                   <div className="mt-1 text-xs text-muted-foreground">
                     Configure metadata and reusable reply content.
@@ -818,7 +826,7 @@ export default function SettingsCaseManagement() {
                   <SettingInput
                     value={qpName}
                     onChange={(e) => setQpName(e.target.value)}
-                    disabled={qpBusy || !canManageQuickparts}
+                    disabled={qpBusy || !canManageQuickparts || !qpEditorEnabled}
                     placeholder="Quickpart name"
                   />
                 </label>
@@ -828,7 +836,7 @@ export default function SettingsCaseManagement() {
                   <SettingInput
                     value={qpDescription}
                     onChange={(e) => setQpDescription(e.target.value)}
-                    disabled={qpBusy || !canManageQuickparts}
+                    disabled={qpBusy || !canManageQuickparts || !qpEditorEnabled}
                     placeholder="Short description"
                   />
                 </label>
@@ -851,7 +859,7 @@ export default function SettingsCaseManagement() {
                           className="h-4 w-4 cursor-pointer rounded border-border"
                           checked={qpIsActive}
                           onChange={(e) => setQpIsActive(e.target.checked)}
-                          disabled={qpBusy || !canManageQuickparts}
+                          disabled={qpBusy || !canManageQuickparts || !qpEditorEnabled}
                         />
                       </div>
                     </label>
@@ -864,7 +872,7 @@ export default function SettingsCaseManagement() {
                     <TiptapEditor
                       value={qpBody}
                       onChange={setQpBody}
-                      disabled={qpBusy || !canManageQuickparts}
+                      disabled={qpBusy || !canManageQuickparts || !qpEditorEnabled}
                       placeholder="Write quickpart content..."
                       className="text-sm"
                     />
@@ -876,7 +884,13 @@ export default function SettingsCaseManagement() {
 
                 <div className="flex justify-end gap-2">
                   <SaveButton
-                    disabled={qpBusy || !canManageQuickparts || !qpName.trim() || !qpDirty}
+                    disabled={
+                      qpBusy ||
+                      !canManageQuickparts ||
+                      !qpEditorEnabled ||
+                      !qpName.trim() ||
+                      !qpDirty
+                    }
                     onClick={onSaveQuickpart}
                     title="Save quickpart"
                     iconOnly={true}

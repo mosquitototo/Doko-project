@@ -114,6 +114,65 @@ def stringify(value) -> str:
     return str(value)
 
 
+def _get_explicit_chat_command_output(run, prompt: str) -> tuple[bool, str]:
+    if run is None:
+        return False, ""
+
+    provider_execution = getattr(run, "provider_execution", None) or {}
+    if not isinstance(provider_execution, dict):
+        return False, ""
+
+    request_hints = provider_execution.get("request_hints") or {}
+    if not isinstance(request_hints, dict):
+        return False, ""
+
+    command = stringify(request_hints.get("chat_command") or "").strip()
+    return bool(command), stringify(prompt or "")
+
+
+def _add_explicit_chat_command_output(
+    *,
+    provider: SOARProvider,
+    template: InvestigationTemplate,
+    launch_payload: dict,
+    command_output: str,
+) -> dict:
+    result = copy.deepcopy(launch_payload or {})
+    execution_config = template.execution_config or {}
+    if not isinstance(execution_config, dict):
+        execution_config = {}
+
+    launch_fields = execution_config.get("launch_fields") or {}
+    if not isinstance(launch_fields, dict):
+        launch_fields = {}
+
+    input_payload_field = stringify(
+        launch_fields.get("input_payload_field") or ""
+    ).strip()
+    input_variable_name = stringify(
+        launch_fields.get("input_variable_name") or "doko_output"
+    ).strip() or "doko_output"
+
+    if not input_payload_field and provider.provider_kind == "splunk_soar":
+        input_payload_field = "inputs"
+
+    if not input_payload_field:
+        result["doko_output"] = command_output
+        return result
+
+    current_inputs = result.get(input_payload_field)
+    if current_inputs in (None, "", [], {}):
+        current_inputs = {}
+    if not isinstance(current_inputs, dict):
+        raise ValidationError("SOAR input payload field must contain a JSON object.")
+
+    result[input_payload_field] = {
+        **copy.deepcopy(current_inputs),
+        input_variable_name: command_output,
+    }
+    return result
+
+
 def template_get(context: dict, key: str, default=""):
     return (context.get("template") or {}).get(key, default)
 
@@ -947,6 +1006,13 @@ class SOARService:
             if value not in (None, "", [], {}):
                 launch_variables[key] = copy.deepcopy(value)
 
+        is_explicit_chat_command, command_output = _get_explicit_chat_command_output(
+            run,
+            prompt,
+        )
+        if is_explicit_chat_command:
+            launch_variables["doko_output"] = command_output
+
         mapped_payload = self._build_template_launch_payload(
             template=template,
             variables=launch_variables,
@@ -962,6 +1028,14 @@ class SOARService:
             **mapped_payload,
             **launch_fields_payload,
         }
+
+        if is_explicit_chat_command:
+            launch_payload = _add_explicit_chat_command_output(
+                provider=self.provider,
+                template=template,
+                launch_payload=launch_payload,
+                command_output=command_output,
+            )
 
         template_identifier_payload = {}
         if not launch_payload:
@@ -1016,6 +1090,13 @@ class SOARService:
     def poll_execution(self, *, template: InvestigationTemplate, provider_execution: dict) -> dict:
         status_config = self.provider.status_config or {}
         status_request_config = _normalize_request_config(status_config)
+
+        if not status_request_config and self.provider.provider_kind == "splunk_soar":
+            status_request_config = {
+                "method": "GET",
+                "url_template": "{base_url}/rest/playbook_run/{remote_run_id}",
+                "headers": {},
+            }
 
         if not status_request_config:
             return {

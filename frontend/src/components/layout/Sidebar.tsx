@@ -100,6 +100,8 @@ export default function Sidebar({
   const showCaseManagement = canAny([
     "settings.case_management.view",
     "settings.case_management.manage",
+    "settings.automation_rules.view",
+    "settings.automation_rules.manage",
   ]);
 
   const showWorkbooks = canAny([

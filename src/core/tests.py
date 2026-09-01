@@ -18,7 +18,7 @@ from core.serializers_settings import AutomationRuleSerializer, RoleSerializer
 from core.services_automation import AutomationContext, evaluate_rule_conditions, run_automation_rules_for_event
 from core.services_chat_context import ChatContextRequest, build_chat_context_snapshot
 from core.services_chat_posting import post_generated_draft, user_has_draft_target_permission
-from core.services_chat import _build_recent_conversation_history, _format_prompt, execute_chat_run
+from core.services_chat import _build_recent_conversation_history, _format_prompt, _wait_for_action_completion, execute_chat_run
 from core.services_llm import LLMService
 from core.services_soar import SOARService, _sanitize_soar_data
 from core.services_splunk_hec import build_audit_log_hec_payload, send_payload_to_splunk_hec, test_splunk_hec_connection
@@ -580,7 +580,15 @@ class DokoSecurityAndFunctionTests(APITestCase):
         self.assertEqual(received["body"]["target"], "203.0.113.10")
         self.assertEqual(result["response"]["access_token"], "[redacted]")
 
-    def _capture_soar_launch(self, provider, template, variables=None):
+    def _capture_soar_launch(
+        self,
+        provider,
+        template,
+        variables=None,
+        *,
+        prompt="Investigate",
+        run=None,
+    ):
         service = SOARService(provider)
         with patch.object(
             service,
@@ -591,15 +599,278 @@ class DokoSecurityAndFunctionTests(APITestCase):
             },
         ) as perform_request:
             result = service.launch_execution(
-                run=None,
+                run=run,
                 template=template,
                 variables=variables or {},
-                prompt="Investigate",
+                prompt=prompt,
             )
 
         request_config, context = perform_request.call_args.args[:2]
         body = service._render_value(request_config.get("body_template"), context)
         return request_config, body, result
+
+    def test_explicit_chat_command_sends_trailing_text_as_doko_output(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-command-output",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate(
+            code="user-activity",
+            name="User activity",
+            entity_type="user",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/user_activity",
+            default_variables={"container_id": "47005"},
+            input_mapping={
+                "inputs": {
+                    "doko_output": {"from_variable": "doko_output"},
+                },
+            },
+            execution_config={
+                "launch_fields": {
+                    "target_object_field": "container_id",
+                    "input_payload_field": "inputs",
+                    "input_variable_name": "doko_output",
+                },
+            },
+        )
+        run = Mock(
+            id="run-1",
+            request_id="request-1",
+            provider_execution={
+                "request_hints": {"chat_command": "/user_activity"},
+            },
+        )
+
+        _, body, _ = self._capture_soar_launch(
+            provider,
+            template,
+            prompt="toto",
+            run=run,
+        )
+
+        self.assertEqual(
+            body,
+            {
+                "run": True,
+                "playbook_id": "local/user_activity",
+                "container_id": 47005,
+                "inputs": {"doko_output": "toto"},
+            },
+        )
+
+    def test_explicit_chat_command_sends_empty_doko_output_without_trailing_text(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-empty-command-output",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate(
+            code="user-activity-empty",
+            name="User activity empty",
+            entity_type="user",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/user_activity",
+            default_variables={"container_id": "47005"},
+            input_mapping={
+                "inputs": {
+                    "doko_output": {"from_variable": "doko_output"},
+                },
+            },
+            execution_config={
+                "launch_fields": {
+                    "target_object_field": "container_id",
+                    "input_payload_field": "inputs",
+                    "input_variable_name": "doko_output",
+                },
+            },
+        )
+        run = Mock(
+            id="run-2",
+            request_id="request-2",
+            provider_execution={
+                "request_hints": {"chat_command": "/user_activity"},
+            },
+        )
+
+        _, body, _ = self._capture_soar_launch(
+            provider,
+            template,
+            prompt="",
+            run=run,
+        )
+
+        self.assertEqual(
+            body,
+            {
+                "run": True,
+                "playbook_id": "local/user_activity",
+                "container_id": 47005,
+                "inputs": {"doko_output": ""},
+            },
+        )
+
+    def test_non_command_soar_launch_does_not_send_prompt_as_doko_output(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-no-command-output",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate(
+            code="user-activity-no-command",
+            name="User activity no command",
+            entity_type="user",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/user_activity",
+            default_variables={"container_id": "47005"},
+            input_mapping={
+                "inputs": {
+                    "doko_output": {"from_variable": "doko_output"},
+                },
+            },
+            execution_config={
+                "launch_fields": {
+                    "target_object_field": "container_id",
+                    "input_payload_field": "inputs",
+                    "input_variable_name": "doko_output",
+                },
+            },
+        )
+        run = Mock(
+            id="run-3",
+            request_id="request-3",
+            provider_execution={},
+        )
+
+        _, body, _ = self._capture_soar_launch(
+            provider,
+            template,
+            prompt="conversation content that must stay in Doko",
+            run=run,
+        )
+
+        self.assertEqual(
+            body,
+            {
+                "run": True,
+                "playbook_id": "local/user_activity",
+                "container_id": 47005,
+            },
+        )
+
+    def test_explicit_splunk_chat_command_waits_with_provider_defaults(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-command-wait",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+            timeout_seconds=30,
+        )
+        template = InvestigationTemplate(
+            code="user-activity-wait",
+            name="User activity wait",
+            entity_type="user",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/user_activity",
+            execution_mode="provider_default",
+            execution_config={},
+        )
+        run = Mock(
+            provider_execution={
+                "request_hints": {"chat_command": "/user_activity"},
+            },
+        )
+        action = Mock(
+            template=template,
+            status="running",
+            remote_status="running",
+        )
+
+        def complete_action(current_action):
+            current_action.status = "completed"
+            current_action.remote_status = "success"
+            current_action.output_payload = {"outputs": ["result"]}
+            return current_action
+
+        with patch("core.services_chat.time.sleep"), patch(
+            "core.services_chat._refresh_run_or_raise_cancelled",
+            return_value=run,
+        ), patch(
+            "core.services_chat.refresh_chat_action_run",
+            side_effect=complete_action,
+        ) as refresh_action:
+            result = _wait_for_action_completion(run, action)
+
+        refresh_action.assert_called_once_with(action)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.output_payload, {"outputs": ["result"]})
+
+    def test_splunk_soar_poll_uses_playbook_run_endpoint_by_default(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-default-poll",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+            status_config={},
+        )
+        template = InvestigationTemplate(
+            code="user-activity-poll",
+            name="User activity poll",
+            entity_type="user",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/user_activity",
+        )
+        service = SOARService(provider)
+
+        with patch.object(
+            service,
+            "_perform_request",
+            return_value={
+                "request": {"method": "GET"},
+                "response": {
+                    "id": 17,
+                    "status": "success",
+                    "outputs": ['{"user_id": [23]}'],
+                },
+            },
+        ) as perform_request:
+            result = service.poll_execution(
+                template=template,
+                provider_execution={
+                    "external_run_id": "17",
+                    "remote_template_code": "local/user_activity",
+                    "status": "running",
+                    "variables": {},
+                    "launch_request": {"method": "POST"},
+                    "launch_response": {
+                        "playbook_run_id": "17",
+                        "received": True,
+                    },
+                },
+            )
+
+        request_config = perform_request.call_args.args[0]
+        self.assertEqual(request_config["method"], "GET")
+        self.assertEqual(
+            request_config["url_template"],
+            "{base_url}/rest/playbook_run/{remote_run_id}",
+        )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["poll_response"]["outputs"], ['{"user_id": [23]}'])
 
     def test_splunk_soar_launch_protects_template_playbook_and_default_container(self):
         provider = SOARProvider(

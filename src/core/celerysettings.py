@@ -29,11 +29,6 @@ CELERY_BEAT_SCHEDULE = {
     },
     "run-scheduled-automation-rules": {
         "task": "core.celerytasks.run_scheduled_automation_rules_task",
-        "schedule": 5.0,
+        "schedule": 60.0,
     },
 }
-
-########
-# to test :
-# docker compose exec web python manage.py shell -c "from core.celerytasks import auto_archive_cases, hard_delete_cases; print(auto_archive_cases()); print(hard_delete_cases())"
-########

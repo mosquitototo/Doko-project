@@ -199,6 +199,19 @@ AUTOMATION_OPERATORS = {
     "BETWEEN",
 }
 AUTOMATION_GROUP_OPERATORS = {"AND", "OR"}
+AUTOMATION_NUMERIC_CONDITION_FIELDS = {
+    "linked_alert_count",
+    "object_age_hours",
+    "ioc_count",
+    "asset_count",
+    "inbound_exchange_delay_minutes",
+}
+AUTOMATION_TEXT_CONDITION_OPERATORS = {
+    "EQUAL",
+    "NOT EQUAL",
+    "CONTAINS",
+    "DOES NOT CONTAIN",
+}
 
 AUTOMATION_CONDITION_FIELDS = {
     "event",
@@ -283,6 +296,19 @@ AUTOMATION_STATUSES_BY_SCOPE = {
 }
 
 
+def _valid_automation_time(value) -> bool:
+    parts = str(value or "").strip().split(":")
+    if len(parts) != 2:
+        return False
+
+    try:
+        hours, minutes = (int(part) for part in parts)
+    except (TypeError, ValueError):
+        return False
+
+    return 0 <= hours <= 23 and 0 <= minutes <= 59
+
+
 def automation_condition_fields(value):
     fields = set()
 
@@ -320,6 +346,9 @@ def validate_automation_conditions(value):
             if not isinstance(children, list):
                 raise serializers.ValidationError("Condition children must be a list.")
 
+            if not children:
+                raise serializers.ValidationError("Condition groups cannot be empty.")
+
             operator = str(node.get("operator") or "AND").upper()
             if operator not in AUTOMATION_GROUP_OPERATORS:
                 raise serializers.ValidationError("Unknown condition group operator.")
@@ -336,14 +365,55 @@ def validate_automation_conditions(value):
 
         if operator not in AUTOMATION_OPERATORS:
             raise serializers.ValidationError(f"Unsupported condition operator: {operator}")
-        
+
+        if (
+            field not in AUTOMATION_NUMERIC_CONDITION_FIELDS
+            and field != "scheduled_time"
+            and operator not in AUTOMATION_TEXT_CONDITION_OPERATORS
+        ):
+            raise serializers.ValidationError(
+                f"{operator} is not supported for {field}."
+            )
+
+        if field == "scheduled_time" and operator not in {"EQUAL", "NOT EQUAL", "BETWEEN"}:
+            raise serializers.ValidationError(
+                f"{operator} is not supported for scheduled_time."
+            )
+
         if operator == "BETWEEN":
-            value = node.get("value")
-            if not isinstance(value, dict):
+            condition_value = node.get("value")
+            if not isinstance(condition_value, dict):
                 raise serializers.ValidationError("BETWEEN value must be an object.")
 
-            if not str(value.get("from") or "").strip() or not str(value.get("to") or "").strip():
+            if (
+                condition_value.get("from") in (None, "")
+                or condition_value.get("to") in (None, "")
+            ):
                 raise serializers.ValidationError("BETWEEN requires from and to values.")
+
+            if field in AUTOMATION_NUMERIC_CONDITION_FIELDS:
+                try:
+                    float(condition_value["from"])
+                    float(condition_value["to"])
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError("BETWEEN requires numeric values for this field.")
+            elif field == "scheduled_time" and not (
+                _valid_automation_time(condition_value["from"])
+                and _valid_automation_time(condition_value["to"])
+            ):
+                raise serializers.ValidationError("Scheduled times must use HH:MM format.")
+        else:
+            condition_value = node.get("value")
+            if condition_value in (None, "", [], {}):
+                raise serializers.ValidationError("Condition value is required.")
+
+            if field in AUTOMATION_NUMERIC_CONDITION_FIELDS:
+                try:
+                    float(condition_value)
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError("A numeric value is required for this field.")
+            elif field == "scheduled_time" and not _valid_automation_time(condition_value):
+                raise serializers.ValidationError("Scheduled time must use HH:MM format.")
 
     walk(value)
     return value
@@ -351,13 +421,16 @@ def validate_automation_conditions(value):
 
 def validate_automation_actions(value):
     if value in (None, ""):
-        return []
+        raise serializers.ValidationError("At least one action is required.")
 
     if not isinstance(value, list):
         raise serializers.ValidationError("Actions must be a list.")
 
     if len(value) > 20:
         raise serializers.ValidationError("Too many actions.")
+
+    if not value:
+        raise serializers.ValidationError("At least one action is required.")
 
     for action in value:
         if not isinstance(action, dict):
@@ -421,11 +494,14 @@ def validate_automation_actions(value):
             raise serializers.ValidationError("workbook_template_id is required for workbook actions.")
 
         if action_type == "add_comment":
-                    body = str(action.get("body") or "").strip()
-                    if not body:
-                        raise serializers.ValidationError(
-                            "Comment body is required for add_comment actions."
-                        )
+            body = str(action.get("body") or "").strip()
+            if not body:
+                raise serializers.ValidationError(
+                    "Comment body is required for add_comment actions."
+                )
+
+        if action_type.startswith("change_") and action.get("value") in (None, ""):
+            raise serializers.ValidationError("A value is required for field update actions.")
 
     return value
 
@@ -517,6 +593,15 @@ class AutomationRuleSerializer(serializers.ModelSerializer):
             if scope not in AUTOMATION_ACTION_SCOPES.get(action_type, set()):
                 raise serializers.ValidationError(
                     f"{action_type} is not available for {scope} rules."
+                )
+
+            if (
+                scope == "alert"
+                and action_type == "change_status"
+                and action.get("value") == "merged"
+            ):
+                raise serializers.ValidationError(
+                    "Alert merge status can only be set by linking the alert to a case."
                 )
 
             if action_type == "change_status":

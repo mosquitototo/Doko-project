@@ -209,6 +209,8 @@ Available values:
 
 - `alert.created` : An alert has been created. 
 - `alert.updated` : An alert has been updated. 
+- `alert.ioc_added` : A new IoC has been added to an alert.
+- `alert.asset_added` : A new asset has been added to an alert.
 - `case.created` :  A case has been created. 
 - `case.updated` : A case has been updated. 
 - `case.created_from_alert_escalation` : A case has been created from an alert escalation. 
@@ -218,6 +220,8 @@ Available values:
 - `case.exchange_outbound_created` : A new outbound Exchange has been created on a case. 
 - `hunt.created` : A hunt has been created. 
 - `hunt.updated` : A hunt has been updated. 
+- `hunt.ioc_added` : A new IoC has been added to a hunt.
+- `hunt.asset_added` : A new asset has been added to a hunt.
 - `scheduled_time` : The rule is evaluated by the scheduled automation runner. 
 
 ### Title
@@ -443,7 +447,7 @@ Example:
 IoC CONTAINS 8.8.8.8
 ```
 
-When the rule is triggered by `case.ioc_added`, this field can match the newly added IoC.
+When the rule is triggered by an `ioc_added` event, this field can match the newly added IoC.
 
 ### Asset
 
@@ -461,7 +465,7 @@ Example:
 Asset CONTAINS workstation
 ```
 
-When the rule is triggered by `case.asset_added`, this field can match the newly added asset.
+When the rule is triggered by an `asset_added` event, this field can match the newly added asset.
 
 ### IoC status
 
@@ -479,7 +483,7 @@ Example:
 IoC status EQUAL confirmed
 ```
 
-When the rule is triggered by `case.ioc_added`, this field can match the status of the newly added IoC.
+When the rule is triggered by an `ioc_added` event, this field can match the status of the newly added IoC.
 
 ### Asset status
 
@@ -497,7 +501,7 @@ Example:
 Asset status EQUAL observed
 ```
 
-When the rule is triggered by `case.asset_added`, this field can match the status of the newly added asset.
+When the rule is triggered by an `asset_added` event, this field can match the status of the newly added asset.
 
 ### Scheduled time
 
@@ -1205,6 +1209,10 @@ For triggers such as:
 ```text
 case.ioc_added
 case.asset_added
+alert.ioc_added
+alert.asset_added
+hunt.ioc_added
+hunt.asset_added
 ```
 
 Disable `Run once per object` when each new IoC or asset should be processed.

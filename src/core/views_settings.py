@@ -1069,6 +1069,8 @@ class AutomationRuleMetadataView(APIView):
                 "event_values": [
                     {"value": "alert.created", "label": "Alert created", "scopes": ["alert"]},
                     {"value": "alert.updated", "label": "Alert updated", "scopes": ["alert"]},
+                    {"value": "alert.ioc_added", "label": "IoC added to alert", "scopes": ["alert"]},
+                    {"value": "alert.asset_added", "label": "Asset added to alert", "scopes": ["alert"]},
                     {"value": "case.created", "label": "Case created", "scopes": ["case"]},
                     {"value": "case.updated", "label": "Case updated", "scopes": ["case"]},
                     {"value": "case.created_from_alert_escalation", "label": "Case created from alert escalation", "scopes": ["case"]},
@@ -1080,6 +1082,8 @@ class AutomationRuleMetadataView(APIView):
                     {"value": "case.exchange_outbound_created", "label": "Outbound Exchange created", "scopes": ["case"]},
                     {"value": "hunt.created", "label": "Hunt created", "scopes": ["hunt"]},
                     {"value": "hunt.updated", "label": "Hunt updated", "scopes": ["hunt"]},
+                    {"value": "hunt.ioc_added", "label": "IoC added to hunt", "scopes": ["hunt"]},
+                    {"value": "hunt.asset_added", "label": "Asset added to hunt", "scopes": ["hunt"]},
                     {"value": "scheduled_time", "label": "Scheduled time", "scopes": ["alert", "case", "hunt"]},
                 ],
 

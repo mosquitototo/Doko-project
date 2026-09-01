@@ -95,9 +95,9 @@ export const router = createBrowserRouter([
           { path: "settings/reports", element: <RequirePerm any={["settings.reports.view"]}><SettingsReports /></RequirePerm> },
           { path: "settings/connectors", element: <RequirePerm any={["settings.connectors.view"]}><Connectors /></RequirePerm> },
 
-          { path: "settings/case-management", element: <RequirePerm any={["settings.case_management.view"]}><SettingsCaseManagement /></RequirePerm> },
-          { path: "settings/case-management/automation-rules/new", element: <RequirePerm any={["settings.case_management.manage"]}><AutomationRuleEdit /></RequirePerm> },
-          { path: "settings/case-management/automation-rules/:id", element: <RequirePerm any={["settings.case_management.manage"]}><AutomationRuleEdit /></RequirePerm> },
+          { path: "settings/case-management", element: <RequirePerm any={["settings.case_management.view", "settings.automation_rules.view"]}><SettingsCaseManagement /></RequirePerm> },
+          { path: "settings/case-management/automation-rules/new", element: <RequirePerm any={["settings.automation_rules.manage"]}><AutomationRuleEdit /></RequirePerm> },
+          { path: "settings/case-management/automation-rules/:id", element: <RequirePerm any={["settings.automation_rules.manage"]}><AutomationRuleEdit /></RequirePerm> },
 
           { path: "preferences", element: <Preferences /> },
 

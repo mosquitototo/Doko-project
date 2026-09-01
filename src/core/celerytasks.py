@@ -16,6 +16,7 @@ from .models import (
     AuditLogRetentionSettings,
     Attachment,
     AuditLog,
+    AutomationExecutionLog,
     ChatRun,
     CaseExchange,
     CaseExchangeFollowup,
@@ -184,20 +185,39 @@ def purge_audit_logs() -> dict:
 
     cutoff = timezone.now() - timezone.timedelta(days=days)
 
-    ids = list(
+    audit_ids = list(
         AuditLog.objects
         .filter(created_at__lt=cutoff)
         .order_by("created_at")
         .values_list("id", flat=True)[:2000]
     )
+    automation_log_ids = list(
+        AutomationExecutionLog.objects
+        .filter(started_at__lt=cutoff)
+        .order_by("started_at")
+        .values_list("id", flat=True)[:2000]
+    )
 
-    if not ids:
-        return {"deleted": 0, "days": days}
+    if not audit_ids and not automation_log_ids:
+        return {
+            "deleted": 0,
+            "deleted_audit_logs": 0,
+            "deleted_automation_logs": 0,
+            "days": days,
+        }
 
     with transaction.atomic():
-        deleted, _ = AuditLog.objects.filter(id__in=ids).delete()
+        deleted_audit_logs, _ = AuditLog.objects.filter(id__in=audit_ids).delete()
+        deleted_automation_logs, _ = AutomationExecutionLog.objects.filter(
+            id__in=automation_log_ids
+        ).delete()
 
-    return {"deleted": deleted, "days": days}
+    return {
+        "deleted": deleted_audit_logs + deleted_automation_logs,
+        "deleted_audit_logs": deleted_audit_logs,
+        "deleted_automation_logs": deleted_automation_logs,
+        "days": days,
+    }
 
 
 @shared_task(bind=True)
@@ -495,8 +515,9 @@ def send_audit_log_to_syslog_task(self, audit_log_id: str):
         raise self.retry(exc=exc)
 
 
-@shared_task
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def run_automation_investigation_template_action_task(
+    self,
     *,
     scope: str,
     target_id: str,
@@ -504,10 +525,32 @@ def run_automation_investigation_template_action_task(
     action: dict,
     actor_id: str | None = None,
     data: dict | None = None,
+    execution_log_id: str | None = None,
+    action_index: int | None = None,
 ):
     from django.contrib.auth import get_user_model
-    from .models import Case, Alert, Hunt, AutomationExecutionLog
-    from .services_automation import AutomationContext, _run_investigation_template
+    from .models import Case, Alert, Hunt
+    from .services_automation import (
+        AutomationContext,
+        _automation_error_text,
+        _automation_log_safe,
+        _claim_async_automation_action,
+        _run_investigation_template,
+        _update_async_automation_action,
+    )
+
+    tracked_action = execution_log_id is not None and action_index is not None
+
+    if tracked_action and not _claim_async_automation_action(
+        execution_log_id=execution_log_id,
+        action_index=action_index,
+    ):
+        return {
+            "status": "skipped",
+            "reason": "duplicate_or_completed_execution",
+            "scope": scope,
+            "target_id": target_id,
+        }
 
     target = None
 
@@ -519,6 +562,13 @@ def run_automation_investigation_template_action_task(
         target = Hunt.objects.filter(id=target_id, is_deleted=False).first()
 
     if not target:
+        if tracked_action:
+            _update_async_automation_action(
+                execution_log_id=execution_log_id,
+                action_index=action_index,
+                status="skipped",
+                result={"skipped": "target_not_found"},
+            )
         return {
             "status": "skipped",
             "reason": "target_not_found",
@@ -540,30 +590,42 @@ def run_automation_investigation_template_action_task(
         data=data or {},
     )
 
-    template_id = str((action or {}).get("template_id") or "")
-    if template_id:
-        recent_cutoff = timezone.now() - timezone.timedelta(seconds=120)
-        already_running = AutomationExecutionLog.objects.filter(
-            scope=scope,
-            target_id=target_id,
-            status__in=["running", "success", "partial_success"],
-            started_at__gte=recent_cutoff,
-            actions_results__contains=[{"result": {"queued": True, "template_id": template_id}}],
-        ).exists()
+    try:
+        result = _run_investigation_template(ctx, action if isinstance(action, dict) else {})
+    except Exception as exc:
+        safe_error = _automation_error_text(exc)
+        safe_exception = RuntimeError(safe_error)
 
-        if already_running:
-            return {
-                "status": "skipped",
-                "reason": "duplicate_execution",
-                "scope": scope,
-                "target_id": target_id,
-            }
+        if tracked_action and self.request.retries < self.max_retries:
+            _update_async_automation_action(
+                execution_log_id=execution_log_id,
+                action_index=action_index,
+                status="queued",
+            )
+            raise self.retry(exc=safe_exception)
 
-    result = _run_investigation_template(ctx, action if isinstance(action, dict) else {})
+        if tracked_action:
+            _update_async_automation_action(
+                execution_log_id=execution_log_id,
+                action_index=action_index,
+                status="failed",
+                error=safe_error,
+            )
+        raise safe_exception from exc
+
+    result_status = "skipped" if result.get("skipped") else "success"
+
+    if tracked_action:
+        _update_async_automation_action(
+            execution_log_id=execution_log_id,
+            action_index=action_index,
+            status=result_status,
+            result=result,
+        )
 
     return {
-        "status": "success",
+        "status": result_status,
         "scope": scope,
         "target_id": target_id,
-        "result": result,
+        "result": _automation_log_safe(result),
     }

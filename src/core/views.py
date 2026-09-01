@@ -418,6 +418,42 @@ def _alert_status_before_merge(alert: Alert) -> str:
     return Alert.Status.OPEN
 
 
+def _alert_automation_snapshot(alert: Alert) -> dict:
+    return {
+        "title": alert.title,
+        "description": alert.description,
+        "status": alert.status,
+        "severity": alert.severity,
+        "classification": alert.classification,
+        "source": alert.source,
+        "customer_id": str(alert.customer_id or ""),
+        "owner_id": alert.owner_id,
+        "case_id": str(alert.case_id or ""),
+        "iocs": list(alert.iocs or []),
+        "assets": list(alert.assets or []),
+    }
+
+
+def _dispatch_alert_updated_automation(
+    *,
+    alert_id: str,
+    actor,
+    before: dict,
+    after: dict,
+) -> None:
+    alert = Alert.objects.filter(id=alert_id, is_deleted=False).first()
+    if not alert:
+        return
+
+    _run_automation_safely(
+        scope="alert",
+        target=alert,
+        event="alert.updated",
+        actor=actor,
+        data={"before": before, "after": after},
+    )
+
+
 ALERT_CASE_EXCHANGES_MAX_ITEMS = 20
 ALERT_CASE_EXCHANGE_BODY_MAX_CHARS = 500000
 ALERT_CASE_EXCHANGE_RAW_MAX_BYTES = 200000
@@ -619,12 +655,23 @@ def _dispatch_materialized_case_exchange_events(case_id: str, exchange_id: str, 
         event=exchange_event,
         actor=actor,
         data={
-            "exchange": exchange,
+            "exchange": _automation_exchange_payload(exchange),
             "exchange_id": str(exchange.id),
             "direction": exchange.direction,
             "source": "alert.raw.case_exchanges",
         },
     )
+
+
+def _automation_exchange_payload(exchange: CaseExchange) -> dict:
+    return {
+        "id": str(exchange.id),
+        "direction": exchange.direction or "",
+        "channel": exchange.channel or "",
+        "subject": exchange.subject or "",
+        "sender": exchange.sender or "",
+        "message_id": exchange.message_id or "",
+    }
 
 
 def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, request=None) -> int:
@@ -1021,6 +1068,7 @@ class AlertEscalateToCaseView(APIView):
 
         case_title = base_alert.title
         case_description = _join_alert_descriptions(alerts)
+        alert_automation_transitions = []
 
         with transaction.atomic():
             case = Case.objects.create(
@@ -1045,6 +1093,7 @@ class AlertEscalateToCaseView(APIView):
 
             for idx, alert in enumerate(alerts):
                 previous_status = _alert_status_before_merge(alert)
+                before_alert = _alert_automation_snapshot(alert)
                 update_fields = ["case", "status", "status_before_merge"]
 
                 if (
@@ -1060,6 +1109,11 @@ class AlertEscalateToCaseView(APIView):
                 alert.status_before_merge = previous_status
                 alert.status = Alert.Status.MERGED
                 alert.save(update_fields=update_fields)
+                alert_automation_transitions.append((
+                    str(alert.id),
+                    before_alert,
+                    _alert_automation_snapshot(alert),
+                ))
 
                 created_exchange_count += _materialize_alert_case_exchanges(
                     case=case,
@@ -1096,6 +1150,14 @@ class AlertEscalateToCaseView(APIView):
                     "source": "alert.escalate",
                     "alert_ids": [str(a.id) for a in alerts],
                 },
+            )
+
+        for alert_id, before_alert, after_alert in alert_automation_transitions:
+            _dispatch_alert_updated_automation(
+                alert_id=alert_id,
+                actor=request.user,
+                before=before_alert,
+                after=after_alert,
             )
 
         _run_automation_safely(
@@ -1149,6 +1211,7 @@ class AlertLinkToCaseView(APIView):
                 alert_qs = alert_qs.filter(customer_id__in=customer_ids)
 
             alert = get_object_or_404(alert_qs)
+            before_alert = _alert_automation_snapshot(alert)
 
             case_qs = Case.objects.select_for_update().filter(pk=case_id, is_deleted=False)
             if not request.user.is_staff:
@@ -1161,10 +1224,12 @@ class AlertLinkToCaseView(APIView):
             case_sources_before = _case_alert_sources_for_automation(case)
 
             if alert.case_id == case.id:
+                alert_changed = False
                 if alert.status != Alert.Status.MERGED:
                     alert.status_before_merge = _alert_status_before_merge(alert)
                     alert.status = Alert.Status.MERGED
                     alert.save(update_fields=["status", "status_before_merge"])
+                    alert_changed = True
 
                 created_exchange_count = _materialize_alert_case_exchanges(
                     case=case,
@@ -1192,6 +1257,16 @@ class AlertLinkToCaseView(APIView):
                         },
                     )
                 )
+
+                if alert_changed:
+                    transaction.on_commit(
+                        lambda alert_id=str(alert.id), actor=request.user, before=before_alert, after=_alert_automation_snapshot(alert): _dispatch_alert_updated_automation(
+                            alert_id=alert_id,
+                            actor=actor,
+                            before=before,
+                            after=after,
+                        )
+                    )
 
                 return Response(
                     {
@@ -1242,6 +1317,7 @@ class AlertLinkToCaseView(APIView):
             alert.status_before_merge = previous_status
             alert.status = Alert.Status.MERGED
             alert.save(update_fields=alert_update_fields)
+            after_alert = _alert_automation_snapshot(alert)
 
             created_exchange_count = _materialize_alert_case_exchanges(
                 case=case,
@@ -1289,6 +1365,14 @@ class AlertLinkToCaseView(APIView):
                             "source": after_sources,
                         },
                     },
+                )
+            )
+            transaction.on_commit(
+                lambda alert_id=str(alert.id), actor=request.user, before=before_alert, after=after_alert: _dispatch_alert_updated_automation(
+                    alert_id=alert_id,
+                    actor=actor,
+                    before=before,
+                    after=after,
                 )
             )
 
@@ -1411,6 +1495,33 @@ class AlertRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             },
         )
 
+        from .services_automation import build_added_items_payload
+
+        added_payload = build_added_items_payload(
+            before["iocs"],
+            after["iocs"],
+            before["assets"],
+            after["assets"],
+        )
+
+        for added_ioc in added_payload.get("added_iocs", []):
+            _run_automation_safely(
+                scope="alert",
+                target=updated,
+                event="alert.ioc_added",
+                actor=self.request.user,
+                data={"added_ioc": added_ioc, "before": before, "after": after},
+            )
+
+        for added_asset in added_payload.get("added_assets", []):
+            _run_automation_safely(
+                scope="alert",
+                target=updated,
+                event="alert.asset_added",
+                actor=self.request.user,
+                data={"added_asset": added_asset, "before": before, "after": after},
+            )
+
         if getattr(updated, "case_id", None):
             TimelineItem.objects.create(
                 case=updated.case,
@@ -1441,6 +1552,7 @@ class AlertUnmergeView(APIView):
             case_event = alert.case
             _check_case_manage_access(request, case_event)
             case_sources_before = _case_alert_sources_for_automation(case_event)
+            before_alert = _alert_automation_snapshot(alert)
 
             restored_status = _alert_status_before_merge(alert)
 
@@ -1448,6 +1560,7 @@ class AlertUnmergeView(APIView):
             alert.status = restored_status
             alert.status_before_merge = ""
             alert.save(update_fields=["case", "status", "status_before_merge"])
+            after_alert = _alert_automation_snapshot(alert)
 
             TimelineItem.objects.create(
                 case=case_event,
@@ -1487,6 +1600,14 @@ class AlertUnmergeView(APIView):
                             "source": after_sources,
                         },
                     },
+                )
+            )
+            transaction.on_commit(
+                lambda alert_id=str(alert.id), actor=request.user, before=before_alert, after=after_alert: _dispatch_alert_updated_automation(
+                    alert_id=alert_id,
+                    actor=actor,
+                    before=before,
+                    after=after,
                 )
             )
 
@@ -4275,7 +4396,7 @@ class CaseExchangeListCreateForCaseView(APIView):
             event=exchange_event,
             actor=request.user,
             data={
-                "exchange": ex,
+                "exchange": _automation_exchange_payload(ex),
                 "exchange_id": str(ex.id),
                 "direction": ex.direction,
             },
@@ -4379,7 +4500,7 @@ class CaseExchangeSendView(APIView):
             event="case.exchange_outbound_created",
             actor=request.user,
             data={
-                "exchange": ex,
+                "exchange": _automation_exchange_payload(ex),
                 "exchange_id": str(ex.id),
                 "direction": ex.direction,
             },
@@ -4744,6 +4865,8 @@ class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             "investigation_finished_at": inst.investigation_finished_at.isoformat() if inst.investigation_finished_at else None,
             "search_timeframe_start": inst.search_timeframe_start.isoformat() if inst.search_timeframe_start else None,
             "search_timeframe_end": inst.search_timeframe_end.isoformat() if inst.search_timeframe_end else None,
+            "iocs": list(inst.iocs or []),
+            "assets": list(inst.assets or []),
         }
 
         if not self.request.user.is_staff and "customer" in serializer.validated_data:
@@ -4765,6 +4888,8 @@ class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             "investigation_finished_at": obj.investigation_finished_at.isoformat() if obj.investigation_finished_at else None,
             "search_timeframe_start": obj.search_timeframe_start.isoformat() if obj.search_timeframe_start else None,
             "search_timeframe_end": obj.search_timeframe_end.isoformat() if obj.search_timeframe_end else None,
+            "iocs": list(obj.iocs or []),
+            "assets": list(obj.assets or []),
         }
 
         audit_event(
@@ -4792,6 +4917,33 @@ class HuntRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
                 "after": after,
             },
         )
+
+        from .services_automation import build_added_items_payload
+
+        added_payload = build_added_items_payload(
+            before["iocs"],
+            after["iocs"],
+            before["assets"],
+            after["assets"],
+        )
+
+        for added_ioc in added_payload.get("added_iocs", []):
+            _run_automation_safely(
+                scope="hunt",
+                target=obj,
+                event="hunt.ioc_added",
+                actor=self.request.user,
+                data={"added_ioc": added_ioc, "before": before, "after": after},
+            )
+
+        for added_asset in added_payload.get("added_assets", []):
+            _run_automation_safely(
+                scope="hunt",
+                target=obj,
+                event="hunt.asset_added",
+                actor=self.request.user,
+                data={"added_asset": added_asset, "before": before, "after": after},
+            )
 
     def perform_destroy(self, instance):
         object_id = str(instance.id)

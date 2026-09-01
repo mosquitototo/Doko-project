@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 import json
@@ -41,6 +42,18 @@ from .services_chat import _build_system_prompt
 
 EMPTY_VALUE = "__empty__"
 SYSTEM_AUTHOR_LABEL = "Doko Automation"
+AUTOMATION_LOG_REDACTED_KEYS = {
+    "body",
+    "conclusion",
+    "content",
+    "context",
+    "description",
+    "message",
+    "prompt",
+    "provider_execution",
+    "raw",
+    "runs",
+}
 
 ALLOWED_CONDITION_FIELDS = {
     "event",
@@ -96,6 +109,7 @@ class AutomationContext:
     actor: Any = None
     data: dict | None = None
     rule: AutomationRule | None = None
+    execution_log_id: str = ""
 
     @property
     def target_id(self) -> str:
@@ -122,6 +136,35 @@ def to_json_safe(value):
         return [to_json_safe(v) for v in value]
 
     return value
+
+
+def _automation_log_safe(value):
+    value = to_json_safe(value)
+
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "[redacted]"
+                if str(key).lower() in AUTOMATION_LOG_REDACTED_KEYS
+                else _automation_log_safe(item)
+            )
+            for key, item in value.items()
+        }
+
+    if isinstance(value, list):
+        return [_automation_log_safe(item) for item in value]
+
+    return value
+
+
+def _automation_error_text(exc: Exception) -> str:
+    if isinstance(exc, ValueError):
+        return str(exc)[:2000]
+
+    if isinstance(exc, TimeoutError):
+        return "Investigation template did not complete before timeout"
+
+    return f"{exc.__class__.__name__}: automation action failed"
 
 
 def _as_text(value: Any) -> str:
@@ -471,10 +514,8 @@ TRANSITION_CONDITION_FIELDS = {
 
 
 PROCESSED_AUTOMATION_STATUSES = [
-    AutomationExecutionLog.Status.RUNNING,
     AutomationExecutionLog.Status.SUCCESS,
     AutomationExecutionLog.Status.PARTIAL_SUCCESS,
-    AutomationExecutionLog.Status.FAILED,
 ]
 
 
@@ -498,6 +539,17 @@ def _condition_tree_has_transition_field(tree: dict | None) -> bool:
         return any(_condition_tree_has_transition_field(child) for child in children)
 
     return str(tree.get("field") or "").strip() in TRANSITION_CONDITION_FIELDS
+
+
+def _condition_tree_has_field(tree: dict | None, field: str) -> bool:
+    if not isinstance(tree, dict):
+        return False
+
+    children = tree.get("children")
+    if isinstance(children, list):
+        return any(_condition_tree_has_field(child, field) for child in children)
+
+    return str(tree.get("field") or "").strip() == field
 
 
 def _previous_field_value(ctx: AutomationContext, field: str):
@@ -732,10 +784,15 @@ def _runtime_variables(ctx: AutomationContext, extra: dict | None = None) -> dic
     }
 
     if exchange:
+        exchange_value = (
+            lambda field: exchange.get(field, "")
+            if isinstance(exchange, dict)
+            else getattr(exchange, field, "")
+        )
         variables.update({
-            "exchange.id": str(getattr(exchange, "id", "") or ""),
-            "exchange.subject": getattr(exchange, "subject", "") or "",
-            "exchange.sender": getattr(exchange, "sender", "") or "",
+            "exchange.id": str(exchange_value("id") or ""),
+            "exchange.subject": exchange_value("subject") or "",
+            "exchange.sender": exchange_value("sender") or "",
         })
 
     if extra:
@@ -914,6 +971,10 @@ def _automation_exchange_exists(
     if not rule_id:
         return False
 
+    execution_log_id = str(ctx.execution_log_id or "").strip()
+    if not execution_log_id:
+        return False
+
     source_exchange_id = str(source.id) if source else ""
     action_key = _automation_action_key(action)
 
@@ -924,6 +985,7 @@ def _automation_exchange_exists(
         raw__automation_rule_id=rule_id,
         raw__automation_action_key=action_key,
         raw__source_exchange_id=source_exchange_id,
+        raw__automation_execution_log_id=execution_log_id,
     ).exists()
 
 
@@ -942,6 +1004,9 @@ def _create_exchange_from_source(
             id=quickpart_id,
             is_active=True,
         ).first()
+
+        if not quickpart:
+            raise ValueError("Unknown or inactive Exchange quickpart")
 
     body_template = quickpart.body if quickpart else action.get("body") or ""
     body = sanitize_html(
@@ -991,6 +1056,7 @@ def _create_exchange_from_source(
             "automation_rule_id": _automation_rule_id(ctx),
             "automation_action_index": _automation_action_index(action),
             "automation_action_key": _automation_action_key(action),
+            "automation_execution_log_id": str(ctx.execution_log_id or ""),
             "source_exchange_id": str(source.id) if source else "",
             "quickpart_id": str(quickpart.id) if quickpart else "",
             "send_mode": action.get("send_mode") or "save",
@@ -1102,7 +1168,7 @@ def _exchange_action(ctx: AutomationContext, action: dict) -> dict:
         source_ids = []
         skipped_sources = []
 
-        for source in inbound_qs[:20]:
+        for source in inbound_qs.iterator(chunk_size=100):
             reason = source_skip_reason(source)
 
             if reason:
@@ -1170,6 +1236,12 @@ def _validate_change_field_value(ctx: AutomationContext, field: str, value):
         }
         if str(value) not in choices:
             raise ValueError("Invalid status for this scope")
+        if (
+            isinstance(ctx.target, Alert)
+            and str(value) == Alert.Status.MERGED
+            and not ctx.target.case_id
+        ):
+            raise ValueError("Alert merge status requires a linked case")
         return str(value)
 
     return value
@@ -1200,6 +1272,17 @@ def _change_field(ctx: AutomationContext, action: dict) -> dict:
     setattr(ctx.target, field, value)
 
     update_fields = [field]
+
+    if field == "status" and isinstance(ctx.target, Case):
+        if value == Case.Status.ARCHIVED:
+            if ctx.target.archived_at is None:
+                ctx.target.archived_at = timezone.now()
+                update_fields.append("archived_at")
+        elif ctx.target.archived_at is not None:
+            ctx.target.archived_at = None
+            ctx.target.unarchived_at = timezone.now()
+            update_fields.extend(["archived_at", "unarchived_at"])
+
     if hasattr(ctx.target, "updated_at"):
         update_fields.append("updated_at")
 
@@ -1326,84 +1409,6 @@ def _items_payload(items: list[dict]) -> list[dict]:
         for item in items
         if item.get("value") not in (None, "")
     ]
-
-
-def _source_collection_variables(ctx: AutomationContext) -> dict:
-    ioc_items = [
-        _normalize_target_item(item, "ioc")
-        for item in list(getattr(ctx.target, "iocs", None) or [])
-    ]
-    asset_items = [
-        _normalize_target_item(item, "asset")
-        for item in list(getattr(ctx.target, "assets", None) or [])
-    ]
-
-    return {
-        "iocs": _items_payload(ioc_items),
-        "ioc_values": _items_values(ioc_items),
-        "assets": _items_payload(asset_items),
-        "asset_values": _items_values(asset_items),
-    }
-
-
-def _investigation_variables_for_item(
-    *,
-    ctx: AutomationContext,
-    action: dict,
-    item: dict,
-    index: int,
-) -> dict:
-    context_ids = _target_context_ids(ctx, item)
-
-    target_kind = item.get("kind") or ""
-    target_value = item.get("value") or ""
-    target_type = item.get("type") or ""
-    target_status = item.get("status") or ""
-
-    extra = {
-        "target.kind": target_kind,
-        "target.value": target_value,
-        "target.type": target_type,
-        "target.status": target_status,
-        "target.index": index,
-
-        "observable.kind": target_kind,
-        "observable.value": target_value,
-        "observable.type": target_type,
-        "observable.status": target_status,
-
-        "target_kind": target_kind,
-        "target_value": target_value,
-        "target_type": target_type,
-        "target_status": target_status,
-        "target_index": index,
-
-        "observable_kind": target_kind,
-        "observable_value": target_value,
-        "observable_type": target_type,
-        "observable_status": target_status,
-
-        "doko_output": target_value,
-
-        "target_object_id": context_ids["container_id"] or context_ids["incident_id"],
-        "container_id": context_ids["container_id"],
-        "incident_id": context_ids["incident_id"],
-    }
-
-    rendered = _render_mapping(action.get("variables") or {}, ctx, extra=extra)
-    manual_soar_context = _manual_soar_context_variables(action)
-
-    variables = {
-        **_runtime_variables(ctx, extra=extra),
-        **manual_soar_context,
-        **(rendered if isinstance(rendered, dict) else {}),
-    }
-
-    return {
-        key: value
-        for key, value in variables.items()
-        if value not in (None, "", [], {})
-    }
 
 
 def _investigation_variables_for_items(
@@ -1548,17 +1553,19 @@ def _already_processed_trigger_item(rule: AutomationRule, ctx: AutomationContext
 
 
 def _automation_action_key(action: dict) -> str:
-    return json.dumps(
-        {
-            "index": action.get("_automation_action_index"),
-            "type": action.get("type") or "",
-            "template_id": str(action.get("template_id") or ""),
-            "target_source": action.get("target_source") or "",
-            "target_value": _normalize(action.get("target_value")),
-        },
+    public_action = {
+        str(key): to_json_safe(value)
+        for key, value in action.items()
+        if not str(key).startswith("_")
+    }
+    public_action["automation_action_index"] = action.get("_automation_action_index")
+    canonical = json.dumps(
+        public_action,
         sort_keys=True,
         ensure_ascii=False,
+        separators=(",", ":"),
     )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _processed_action_item_keys(ctx: AutomationContext, action: dict) -> set[str]:
@@ -1668,10 +1675,17 @@ def _apply_workbook_template(ctx: AutomationContext, action: dict) -> dict:
     if not template:
         raise ValueError("Unknown or inactive workbook template")
 
-    instance, _ = WorkbookInstance.objects.get_or_create(
+    instance, created = WorkbookInstance.objects.get_or_create(
         case=case,
         defaults={"template": template},
     )
+
+    if not created and instance.template_id == template.id:
+        return {
+            "workbook_template_id": str(template.id),
+            "workbook_template_name": template.name,
+            "skipped": "workbook_template_already_applied",
+        }
 
     instance.template = template
     instance.save(update_fields=["template"])
@@ -2036,6 +2050,12 @@ def _run_and_collect_automation_investigation(
             template=template,
             provider_execution=provider_execution,
         ) or {}
+        if _automation_result_state(
+            template=template,
+            provider_execution=provider_execution,
+            result=result,
+        ) == "failed":
+            raise RuntimeError("Investigation template remote execution failed")
         return provider_execution, result
 
     max_wait, poll_interval = _automation_polling_settings(template, action)
@@ -2065,14 +2085,20 @@ def _run_and_collect_automation_investigation(
                 template=template,
                 provider_execution=current,
             ) or {}
+            if _automation_result_state(
+                template=template,
+                provider_execution=current,
+                result=result,
+            ) == "failed":
+                raise RuntimeError("Investigation template remote execution failed")
             return current, result
 
         if state == "failed":
-            result = service.collect_result(
+            service.collect_result(
                 template=template,
                 provider_execution=current,
-            ) or {}
-            return current, result
+            )
+            raise RuntimeError("Investigation template remote execution failed")
 
         if time.monotonic() >= deadline:
             raise TimeoutError(
@@ -2366,9 +2392,6 @@ def _run_investigation_template(ctx: AutomationContext, action: dict) -> dict:
 
 
 def _queue_investigation_template_action(ctx: AutomationContext, action: dict) -> dict:
-    from django.db import transaction
-    from .celerytasks import run_automation_investigation_template_action_task
-
     items, processed_item_keys, skipped_item_keys = _prepare_investigation_items(
         ctx,
         action,
@@ -2400,10 +2423,6 @@ def _queue_investigation_template_action(ctx: AutomationContext, action: dict) -
         "data": to_json_safe(ctx.data or {}),
     }
 
-    transaction.on_commit(
-        lambda: run_automation_investigation_template_action_task.delay(**payload)
-    )
-
     return {
         "queued": True,
         "template_id": str(action.get("template_id") or ""),
@@ -2412,7 +2431,135 @@ def _queue_investigation_template_action(ctx: AutomationContext, action: dict) -
         "automation_action_key": _automation_action_key(action),
         "processed_item_keys": processed_item_keys,
         "skipped_item_keys": skipped_item_keys,
+        "_deferred_task": payload,
     }
+
+
+def _automation_execution_status(action_results: list[dict]) -> str:
+    statuses = {
+        str(item.get("status") or "")
+        for item in action_results
+        if isinstance(item, dict)
+    }
+
+    if statuses & {"queued", "running"}:
+        return AutomationExecutionLog.Status.RUNNING
+
+    success_count = sum(
+        1 for item in action_results
+        if isinstance(item, dict) and item.get("status") == "success"
+    )
+    failure_count = sum(
+        1 for item in action_results
+        if isinstance(item, dict) and item.get("status") == "failed"
+    )
+
+    if success_count and failure_count:
+        return AutomationExecutionLog.Status.PARTIAL_SUCCESS
+
+    if failure_count:
+        return AutomationExecutionLog.Status.FAILED
+
+    if success_count:
+        return AutomationExecutionLog.Status.SUCCESS
+
+    return AutomationExecutionLog.Status.SKIPPED
+
+
+def _update_async_automation_action(
+    *,
+    execution_log_id: str,
+    action_index: int,
+    status: str,
+    result: dict | None = None,
+    error: str = "",
+) -> bool:
+    with transaction.atomic():
+        log = (
+            AutomationExecutionLog.objects
+            .select_for_update()
+            .filter(id=execution_log_id)
+            .first()
+        )
+
+        if not log:
+            return False
+
+        action_results = list(log.actions_results or [])
+        entry = next(
+            (
+                item for item in action_results
+                if isinstance(item, dict) and item.get("index") == action_index
+            ),
+            None,
+        )
+
+        if entry is None:
+            return False
+
+        entry["status"] = status
+        entry.pop("error", None)
+
+        if result is not None:
+            entry["result"] = _automation_log_safe(result)
+
+        if error:
+            entry["error"] = error[:2000]
+
+        log.actions_results = action_results
+        log.status = _automation_execution_status(action_results)
+        failed_errors = [
+            str(item.get("error") or "")
+            for item in action_results
+            if isinstance(item, dict) and item.get("status") == "failed"
+        ]
+        log.error = next((value for value in reversed(failed_errors) if value), "")[:2000]
+        log.completed_at = (
+            None
+            if log.status == AutomationExecutionLog.Status.RUNNING
+            else timezone.now()
+        )
+        log.save(update_fields=[
+            "status",
+            "error",
+            "actions_results",
+            "completed_at",
+        ])
+
+    return True
+
+
+def _claim_async_automation_action(*, execution_log_id: str, action_index: int) -> bool:
+    with transaction.atomic():
+        log = (
+            AutomationExecutionLog.objects
+            .select_for_update()
+            .filter(id=execution_log_id)
+            .first()
+        )
+
+        if not log:
+            return False
+
+        action_results = list(log.actions_results or [])
+        entry = next(
+            (
+                item for item in action_results
+                if isinstance(item, dict) and item.get("index") == action_index
+            ),
+            None,
+        )
+
+        if entry is None or entry.get("status") != "queued":
+            return False
+
+        entry["status"] = "running"
+        log.actions_results = action_results
+        log.status = AutomationExecutionLog.Status.RUNNING
+        log.completed_at = None
+        log.save(update_fields=["status", "actions_results", "completed_at"])
+
+    return True
 
 
 def execute_action(ctx: AutomationContext, action: dict) -> dict:
@@ -2459,6 +2606,11 @@ def _within_cooldown(rule: AutomationRule, ctx: AutomationContext) -> bool:
         scope=ctx.scope,
         target_id=ctx.target_id,
         started_at__gte=cutoff,
+        status__in=[
+            AutomationExecutionLog.Status.RUNNING,
+            AutomationExecutionLog.Status.SUCCESS,
+            AutomationExecutionLog.Status.PARTIAL_SUCCESS,
+        ],
     ).exists()
 
 
@@ -2469,6 +2621,25 @@ def _already_running(rule: AutomationRule, ctx: AutomationContext) -> bool:
         target_id=ctx.target_id,
         matched=True,
         status=AutomationExecutionLog.Status.RUNNING,
+    ).exists()
+
+
+def _already_processed_scheduled_slot(rule: AutomationRule, ctx: AutomationContext) -> bool:
+    scheduled_slot = str((ctx.data or {}).get("scheduled_slot") or "").strip()
+
+    if not scheduled_slot:
+        return False
+
+    return AutomationExecutionLog.objects.filter(
+        rule=rule,
+        scope=ctx.scope,
+        target_id=ctx.target_id,
+        matched=True,
+        context__data__scheduled_slot=scheduled_slot,
+        status__in=[
+            AutomationExecutionLog.Status.RUNNING,
+            *PROCESSED_AUTOMATION_STATUSES,
+        ],
     ).exists()
 
 
@@ -2483,6 +2654,31 @@ def _already_ran(rule: AutomationRule, ctx: AutomationContext) -> bool:
         matched=True,
         status__in=PROCESSED_AUTOMATION_STATUSES,
     ).exists()
+
+
+def _dispatch_async_automation_action(
+    *,
+    execution_log_id: str,
+    action_index: int,
+    payload: dict,
+) -> None:
+    from .celerytasks import run_automation_investigation_template_action_task
+
+    try:
+        run_automation_investigation_template_action_task.apply_async(
+            kwargs={
+                **payload,
+                "execution_log_id": execution_log_id,
+                "action_index": action_index,
+            }
+        )
+    except Exception as exc:
+        _update_async_automation_action(
+            execution_log_id=execution_log_id,
+            action_index=action_index,
+            status="failed",
+            error="Unable to queue investigation template action",
+        )
 
 
 def run_automation_rules_for_event(
@@ -2522,6 +2718,7 @@ def run_automation_rules_for_event(
 
         if (
             _already_running(rule, ctx)
+            or _already_processed_scheduled_slot(rule, ctx)
             or _already_ran(rule, ctx)
             or _within_cooldown(rule, ctx)
             or _already_processed_trigger_item(rule, ctx)
@@ -2538,11 +2735,11 @@ def run_automation_rules_for_event(
                 trigger=event,
                 matched=False,
                 status=AutomationExecutionLog.Status.FAILED,
-                error=str(exc)[:2000],
+                error=_automation_error_text(exc),
                 context={
                     "event": event,
                     "target": _target_payload(target),
-                    "data": to_json_safe(data or {}),
+                    "data": _automation_log_safe(data or {}),
                     "trigger_item_key": _trigger_item_key(ctx),
                 },
                 completed_at=timezone.now(),
@@ -2561,6 +2758,7 @@ def run_automation_rules_for_event(
                 not rule.is_enabled
                 or rule.scope != scope
                 or _already_running(rule, ctx)
+                or _already_processed_scheduled_slot(rule, ctx)
                 or _already_ran(rule, ctx)
                 or _within_cooldown(rule, ctx)
                 or _already_processed_trigger_item(rule, ctx)
@@ -2577,11 +2775,11 @@ def run_automation_rules_for_event(
                     trigger=event,
                     matched=False,
                     status=AutomationExecutionLog.Status.FAILED,
-                    error=str(exc)[:2000],
+                    error=_automation_error_text(exc),
                     context={
                         "event": event,
                         "target": _target_payload(target),
-                        "data": to_json_safe(data or {}),
+                        "data": _automation_log_safe(data or {}),
                         "trigger_item_key": _trigger_item_key(ctx),
                     },
                     completed_at=timezone.now(),
@@ -2602,51 +2800,75 @@ def run_automation_rules_for_event(
                 context={
                     "event": event,
                     "target": _target_payload(target),
-                    "data": to_json_safe(data or {}),
+                    "data": _automation_log_safe(data or {}),
                     "trigger_item_key": _trigger_item_key(ctx),
                 },
             )
+            ctx.execution_log_id = str(log.id)
 
         action_results = []
-        final_status = AutomationExecutionLog.Status.SUCCESS
-        error = ""
+        deferred_tasks = []
 
         for index, action in enumerate(rule.actions or []):
             try:
                 action_payload = dict(action) if isinstance(action, dict) else {}
                 action_payload["_automation_action_index"] = index
                 result = execute_action(ctx, action_payload)
+                deferred_task = result.pop("_deferred_task", None)
+                action_status = (
+                    "queued"
+                    if deferred_task
+                    else "skipped"
+                    if result.get("skipped")
+                    else "success"
+                )
                 action_results.append({
                     "index": index,
-                    "status": "success",
-                    "result": to_json_safe(result),
+                    "status": action_status,
+                    "result": _automation_log_safe(result),
                 })
+
+                if deferred_task:
+                    deferred_tasks.append((index, deferred_task))
             except Exception as exc:
-                final_status = (
-                    AutomationExecutionLog.Status.PARTIAL_SUCCESS
-                    if action_results
-                    else AutomationExecutionLog.Status.FAILED
-                )
-                error = str(exc)[:2000]
                 action_results.append({
                     "index": index,
                     "status": "failed",
-                    "error": error,
+                    "error": _automation_error_text(exc),
                 })
 
                 if rule.stop_on_first_action_error:
                     break
 
+        final_status = _automation_execution_status(action_results)
+        failed_errors = [
+            str(item.get("error") or "")
+            for item in action_results
+            if isinstance(item, dict) and item.get("status") == "failed"
+        ]
         log.status = final_status
-        log.error = error
+        log.error = next((value for value in reversed(failed_errors) if value), "")[:2000]
         log.actions_results = action_results
-        log.completed_at = timezone.now()
+        log.completed_at = (
+            None
+            if final_status == AutomationExecutionLog.Status.RUNNING
+            else timezone.now()
+        )
         log.save(update_fields=[
             "status",
             "error",
             "actions_results",
             "completed_at",
         ])
+
+        for action_index, payload in deferred_tasks:
+            transaction.on_commit(
+                lambda execution_log_id=str(log.id), action_index=action_index, payload=payload: _dispatch_async_automation_action(
+                    execution_log_id=execution_log_id,
+                    action_index=action_index,
+                    payload=payload,
+                )
+            )
 
         logs.append(log)
 
@@ -2656,6 +2878,7 @@ def run_automation_rules_for_event(
 def run_scheduled_automation_rules() -> dict:
     now = timezone.localtime()
     scheduled_time = now.strftime("%H:%M")
+    scheduled_slot = now.strftime("%Y-%m-%dT%H:%M%z")
 
     counts = {
         "alert": 0,
@@ -2663,25 +2886,21 @@ def run_scheduled_automation_rules() -> dict:
         "hunt": 0,
     }
 
-    scheduled_scopes = (
-        AutomationRule.objects
-        .filter(
-            is_enabled=True,
-            conditions__icontains="scheduled_time",
+    scheduled_rules = [
+        rule
+        for rule in AutomationRule.objects.filter(is_enabled=True).only(
+            "id", "scope", "conditions"
         )
-        .values_list("scope", flat=True)
-        .distinct()
-    )
+        if _condition_tree_has_field(rule.conditions, "scheduled_time")
+    ]
+
+    scheduled_scopes = sorted({rule.scope for rule in scheduled_rules})
 
     for scope in scheduled_scopes:
         scheduled_rule_ids = list(
-            AutomationRule.objects
-            .filter(
-                is_enabled=True,
-                scope=scope,
-                conditions__icontains="scheduled_time",
-            )
-            .values_list("id", flat=True)
+            rule.id
+            for rule in scheduled_rules
+            if rule.scope == scope
         )
 
         if not scheduled_rule_ids:
@@ -2691,26 +2910,29 @@ def run_scheduled_automation_rules() -> dict:
             qs = Case.objects.filter(
                 is_deleted=False,
                 archived_at__isnull=True,
-            ).order_by("-updated_at", "-created_at")[:500]
+            ).order_by("-updated_at", "-created_at")
         elif scope == "alert":
             qs = Alert.objects.filter(
                 is_deleted=False,
-            ).order_by("-updated_at", "-created_at")[:500]
+            ).order_by("-updated_at", "-created_at")
         elif scope == "hunt":
             qs = Hunt.objects.filter(
                 is_deleted=False,
                 archived_at__isnull=True,
-            ).order_by("-updated_at", "-created_at")[:500]
+            ).order_by("-updated_at", "-created_at")
         else:
             continue
 
-        for target in qs:
+        for target in qs.iterator(chunk_size=500):
             logs = run_automation_rules_for_event(
                 scope=scope,
                 target=target,
                 event="scheduled_time",
                 actor=None,
-                data={"scheduled_time": scheduled_time},
+                data={
+                    "scheduled_time": scheduled_time,
+                    "scheduled_slot": scheduled_slot,
+                },
                 rule_ids=scheduled_rule_ids,
             )
             counts[scope] += len(logs)

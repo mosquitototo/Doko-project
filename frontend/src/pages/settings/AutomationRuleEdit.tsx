@@ -1241,14 +1241,16 @@ export default function AutomationRuleEdit() {
         stop_on_first_action_error: stopOnFirstActionError,
       };
 
-      const saved = isNew
-        ? await createAutomationRule(payload)
-        : await updateAutomationRule(id!, payload);
+      if (isNew) {
+        await createAutomationRule(payload);
+      } else {
+        await updateAutomationRule(id!, payload);
+      }
 
       push({ kind: "success", title: "Automation rule saved" });
 
       if (isNew) {
-        navigate(`/settings/case-management/automation-rules/${saved.id}`);
+        navigate("/settings/case-management");
       }
     } catch (e: any) {
       push({
