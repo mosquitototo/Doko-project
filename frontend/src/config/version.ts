@@ -1,2 +1,2 @@
-export const DOKO_VERSION = "v1.0.2";
+export const DOKO_VERSION = "v1.0.3";
 export const DOKO_RELEASES_URL = "https://github.com/mosquitototo/Doko-project/releases";

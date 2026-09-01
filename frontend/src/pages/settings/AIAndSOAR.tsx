@@ -588,6 +588,11 @@ export default function AIAndSOARSettingsPage() {
     try {
       const payload = buildSimpleSOARPayload({
         name: soarForm.name.trim(),
+        provider_kind:
+          soarForm.provider_kind === "splunk_soar" ||
+          soarForm.provider_kind === "n8n"
+            ? soarForm.provider_kind
+            : "generic_http",
         base_url: soarForm.base_url.trim(),
         auth_type: soarForm.auth_type.trim() || "none",
         auth_token_type: soarForm.auth_token_type.trim(),
@@ -595,6 +600,9 @@ export default function AIAndSOARSettingsPage() {
         timeout_seconds: normalizeTimeoutSeconds(soarForm.timeout_seconds, 60),
         is_enabled: soarForm.is_enabled,
         api_key: soarForm.api_key.trim() || undefined,
+        request_config: parseJsonObject(soarForm.request_config_text),
+        response_config: parseJsonObject(soarForm.response_config_text),
+        status_config: parseJsonObject(soarForm.status_config_text),
       });
 
       if (editingSoarId) {
@@ -1070,16 +1078,39 @@ export default function AIAndSOARSettingsPage() {
                         />
                       </label>
 
-                      <label className="space-y-2 xl:col-span-2">
-                        <FieldLabel required>Base URL</FieldLabel>
-                        <SettingInput
-                          value={soarForm.base_url}
-                          disabled={!canManage || saving || deleting}
-                          onChange={(e) =>
-                            setSoarForm((p) => ({ ...p, base_url: e.target.value }))
-                          }
-                        />
-                      </label>
+                      <div className="grid gap-4 md:grid-cols-3 xl:col-span-2">
+                        <label className="space-y-2 md:col-span-2">
+                          <FieldLabel required>Base URL</FieldLabel>
+                          <SettingInput
+                            value={soarForm.base_url}
+                            disabled={!canManage || saving || deleting}
+                            onChange={(e) =>
+                              setSoarForm((p) => ({
+                                ...p,
+                                base_url: e.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+
+                        <label className="space-y-2">
+                          <FieldLabel required>SOAR type</FieldLabel>
+                          <SettingSelect
+                            value={soarForm.provider_kind}
+                            disabled={!canManage || saving || deleting}
+                            onChange={(e) =>
+                              setSoarForm((p) => ({
+                                ...p,
+                                provider_kind: e.target.value,
+                              }))
+                            }
+                          >
+                            <option value="splunk_soar">Splunk SOAR</option>
+                            <option value="n8n">n8n</option>
+                            <option value="generic_http">Generic</option>
+                          </SettingSelect>
+                        </label>
+                      </div>
 
                       <label className="space-y-2">
                         <FieldLabel required>Auth type</FieldLabel>

@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
@@ -578,6 +579,449 @@ class DokoSecurityAndFunctionTests(APITestCase):
         self.assertEqual(received["body"]["remote_template_code"], "enrich-ip")
         self.assertEqual(received["body"]["target"], "203.0.113.10")
         self.assertEqual(result["response"]["access_token"], "[redacted]")
+
+    def _capture_soar_launch(self, provider, template, variables=None):
+        service = SOARService(provider)
+        with patch.object(
+            service,
+            "_perform_request",
+            return_value={
+                "request": {"method": "POST"},
+                "response": {"run_id": "run-1", "status": "running"},
+            },
+        ) as perform_request:
+            result = service.launch_execution(
+                run=None,
+                template=template,
+                variables=variables or {},
+                prompt="Investigate",
+            )
+
+        request_config, context = perform_request.call_args.args[:2]
+        body = service._render_value(request_config.get("body_template"), context)
+        return request_config, body, result
+
+    def test_splunk_soar_launch_protects_template_playbook_and_default_container(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-soar",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+            request_config={
+                "method": "POST",
+                "url_template": "{base_url}",
+                "body_template": {"payload": "{variables}"},
+            },
+        )
+        template = InvestigationTemplate(
+            code="splunk-template",
+            name="Splunk template",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/test",
+            default_variables={"target_object_id": "47005", "container_id": "47005"},
+            input_mapping={
+                "playbook_id": {"from_variable": "playbook_id"},
+                "container_id": {"from_variable": "container_id"},
+                "scope": {"value": "all"},
+                "inputs": {"value": {"doko_output": "safe"}},
+            },
+            execution_config={
+                "launch_fields": {
+                    "remote_template_field": "playbook_id",
+                    "target_object_field": "container_id",
+                },
+                "required_launch_fields": ["container_id"],
+            },
+        )
+
+        request_config, body, result = self._capture_soar_launch(
+            provider,
+            template,
+            {
+                "playbook_id": "local/other",
+                "playbook_name": "local/other",
+                "target_object_id": "12345",
+                "container_id": "12345",
+                "unrequested_data": "must-not-leave-doko",
+            },
+        )
+
+        self.assertEqual(request_config["method"], "POST")
+        self.assertEqual(request_config["url_template"], "{base_url}/rest/playbook_run")
+        self.assertEqual(
+            body,
+            {
+                "run": True,
+                "playbook_id": "local/test",
+                "container_id": 47005,
+                "scope": "all",
+                "inputs": {"doko_output": "safe"},
+            },
+        )
+        self.assertEqual(result["remote_template_code"], "local/test")
+
+    def test_splunk_soar_launch_uses_runtime_container_without_template_default(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-runtime-target",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate(
+            code="runtime-target",
+            name="Runtime target",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="local/runtime",
+            execution_config={
+                "launch_fields": {"target_object_field": "container_id"},
+                "required_launch_fields": ["container_id"],
+            },
+        )
+
+        _, body, _ = self._capture_soar_launch(
+            provider,
+            template,
+            {"target_object_id": "12345"},
+        )
+
+        self.assertEqual(body["container_id"], 12345)
+
+    def test_splunk_soar_launch_rejects_invalid_container_before_network(self):
+        provider = SOARProvider(
+            name="Splunk SOAR",
+            code="splunk-invalid-target",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+        )
+
+        for target in ("", "abc", "0", "-1"):
+            with self.subTest(target=target):
+                template = InvestigationTemplate(
+                    code=f"invalid-{target or 'empty'}",
+                    name="Invalid target",
+                    entity_type="ip",
+                    target_kind="single",
+                    soar_provider=provider,
+                    remote_template_code="local/test",
+                    default_variables={"container_id": target},
+                    execution_config={
+                        "launch_fields": {"target_object_field": "container_id"},
+                    },
+                )
+                service = SOARService(provider)
+                with patch.object(service, "_perform_request") as perform_request:
+                    with self.assertRaises(ValidationError):
+                        service.launch_execution(
+                            run=None,
+                            template=template,
+                            variables={},
+                            prompt="Investigate",
+                        )
+                perform_request.assert_not_called()
+
+    def test_n8n_launch_uses_relative_webhook_path(self):
+        provider = SOARProvider(
+            name="n8n",
+            code="n8n",
+            provider_kind="n8n",
+            base_url="https://n8n.example.test",
+            auth_type="none",
+            request_config={
+                "method": "POST",
+                "url_template": "{base_url}/rest/playbook_run",
+            },
+        )
+        template = InvestigationTemplate(
+            code="n8n-template",
+            name="n8n template",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="doko/investigate",
+            input_mapping={"observable": {"from_variable": "observable"}},
+        )
+
+        request_config, body, _ = self._capture_soar_launch(
+            provider,
+            template,
+            {"observable": "203.0.113.10"},
+        )
+
+        self.assertEqual(request_config["url_template"], "{base_url}/webhook/doko/investigate")
+        self.assertEqual(body, {"observable": "203.0.113.10"})
+
+    def test_soar_runtime_empty_value_preserves_template_default(self):
+        provider = SOARProvider(
+            name="n8n",
+            code="n8n-default-value",
+            provider_kind="n8n",
+            base_url="https://n8n.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate(
+            code="default-value",
+            name="Default value",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="investigate",
+            default_variables={"observable": "203.0.113.10"},
+            input_mapping={"observable": {"from_variable": "observable"}},
+        )
+
+        _, body, _ = self._capture_soar_launch(
+            provider,
+            template,
+            {"observable": ""},
+        )
+
+        self.assertEqual(body, {"observable": "203.0.113.10"})
+
+    def test_n8n_launch_rejects_unsafe_webhook_paths_before_network(self):
+        provider = SOARProvider(
+            name="n8n",
+            code="n8n-unsafe",
+            provider_kind="n8n",
+            base_url="https://n8n.example.test",
+            auth_type="none",
+        )
+
+        for path in ("https://evil.test/hook", "hook?x=1", "hook#fragment", "hook\\child", "../hook", "/hook", "hook/", "hook//child"):
+            with self.subTest(path=path):
+                template = InvestigationTemplate(
+                    code="unsafe-path",
+                    name="Unsafe path",
+                    entity_type="ip",
+                    target_kind="single",
+                    soar_provider=provider,
+                    remote_template_code=path,
+                    input_mapping={"observable": {"value": "203.0.113.10"}},
+                )
+                service = SOARService(provider)
+                with patch.object(service, "_perform_request") as perform_request:
+                    with self.assertRaises(ValidationError):
+                        service.launch_execution(
+                            run=None,
+                            template=template,
+                            variables={},
+                            prompt="Investigate",
+                        )
+                perform_request.assert_not_called()
+
+    def test_generic_soar_requires_explicit_launch_request(self):
+        provider = SOARProvider(
+            name="Generic",
+            code="generic-missing-request",
+            provider_kind="generic_http",
+            base_url="https://generic.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate(
+            code="generic-template",
+            name="Generic template",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="remote-template",
+        )
+        service = SOARService(provider)
+
+        with patch.object(service, "_perform_request") as perform_request:
+            with self.assertRaisesMessage(
+                ValidationError,
+                "Generic SOAR provider launch request is not configured.",
+            ):
+                service.launch_execution(
+                    run=None,
+                    template=template,
+                    variables={},
+                    prompt="Investigate",
+                )
+
+        perform_request.assert_not_called()
+
+    def test_generic_soar_payload_placeholders_receive_validated_launch_payload(self):
+        for placeholder in ("{variables}", "{launch_payload}"):
+            with self.subTest(placeholder=placeholder):
+                provider = SOARProvider(
+                    name="Generic",
+                    code="generic-payload",
+                    provider_kind="generic_http",
+                    base_url="https://generic.example.test",
+                    auth_type="none",
+                    request_config={
+                        "method": "POST",
+                        "url_template": "{base_url}/launch",
+                        "body_template": {
+                            "payload": placeholder,
+                            "source": "doko",
+                        },
+                    },
+                )
+                template = InvestigationTemplate(
+                    code="generic-payload-template",
+                    name="Generic payload template",
+                    entity_type="ip",
+                    target_kind="single",
+                    soar_provider=provider,
+                    remote_template_code="remote-template",
+                    default_variables={"container_id": "47005"},
+                    input_mapping={
+                        "container_id": {"from_variable": "container_id"},
+                        "observable": {"from_variable": "observable"},
+                    },
+                    execution_config={
+                        "launch_fields": {"target_object_field": "container_id"},
+                        "required_launch_fields": ["container_id"],
+                    },
+                )
+
+                _, body, _ = self._capture_soar_launch(
+                    provider,
+                    template,
+                    {"container_id": "12345", "observable": "203.0.113.10"},
+                )
+
+                self.assertEqual(
+                    body,
+                    {
+                        "payload": {
+                            "container_id": "47005",
+                            "observable": "203.0.113.10",
+                        },
+                        "source": "doko",
+                    },
+                )
+
+    def test_generic_soar_preserves_existing_body_merge_modes(self):
+        cases = (
+            (
+                {
+                    "method": "POST",
+                    "url_template": "{base_url}/launch",
+                },
+                {"observable": "203.0.113.10"},
+            ),
+            (
+                {
+                    "method": "POST",
+                    "url_template": "{base_url}/launch",
+                    "body_template": {"source": "doko"},
+                },
+                {"observable": "203.0.113.10", "source": "doko"},
+            ),
+            (
+                {
+                    "method": "POST",
+                    "url_template": "{base_url}/launch",
+                    "body_template": {"payload": {"source": "doko"}},
+                },
+                {
+                    "payload": {
+                        "observable": "203.0.113.10",
+                        "source": "doko",
+                    }
+                },
+            ),
+        )
+
+        for request_config, expected_body in cases:
+            with self.subTest(request_config=request_config):
+                provider = SOARProvider(
+                    name="Generic",
+                    code="generic-body-merge",
+                    provider_kind="generic_http",
+                    base_url="https://generic.example.test",
+                    auth_type="none",
+                    request_config=request_config,
+                )
+                template = InvestigationTemplate(
+                    code="generic-body-template",
+                    name="Generic body template",
+                    entity_type="ip",
+                    target_kind="single",
+                    soar_provider=provider,
+                    remote_template_code="remote-template",
+                    input_mapping={
+                        "observable": {"from_variable": "observable"},
+                    },
+                )
+
+                _, body, _ = self._capture_soar_launch(
+                    provider,
+                    template,
+                    {"observable": "203.0.113.10"},
+                )
+
+                self.assertEqual(body, expected_body)
+
+    def test_legacy_xsoar_provider_keeps_generic_request_behavior(self):
+        provider = SOARProvider(
+            name="Legacy XSOAR",
+            code="legacy-xsoar",
+            provider_kind="xsoar",
+            base_url="https://xsoar.example.test",
+            auth_type="none",
+            request_config={
+                "method": "POST",
+                "url_template": "{base_url}/legacy-launch",
+                "body_template": {"payload": "{launch_payload}"},
+            },
+        )
+        template = InvestigationTemplate(
+            code="legacy-template",
+            name="Legacy template",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="legacy-playbook",
+        )
+
+        request_config, body, _ = self._capture_soar_launch(provider, template)
+
+        self.assertEqual(request_config["url_template"], "{base_url}/legacy-launch")
+        self.assertEqual(body, {"payload": {"remote_template_code": "legacy-playbook"}})
+
+    def test_unknown_soar_provider_kind_is_rejected_before_network(self):
+        provider = SOARProvider(
+            name="Unknown",
+            code="unknown-provider",
+            provider_kind="unexpected",
+            base_url="https://unknown.example.test",
+            auth_type="none",
+            request_config={
+                "method": "POST",
+                "url_template": "{base_url}/launch",
+                "body_template": {"payload": "{variables}"},
+            },
+        )
+        template = InvestigationTemplate(
+            code="unknown-template",
+            name="Unknown template",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="remote-template",
+        )
+        service = SOARService(provider)
+
+        with patch.object(service, "_perform_request") as perform_request:
+            with self.assertRaises(ValidationError):
+                service.launch_execution(
+                    run=None,
+                    template=template,
+                    variables={},
+                    prompt="Investigate",
+                )
+
+        perform_request.assert_not_called()
 
     @patch("core.services_splunk_hec.requests.post")
     def test_splunk_hec_test_reports_success_and_hides_network_details(self, post):

@@ -143,6 +143,7 @@ export type CreateInvestigationTemplatePayload = {
 
 export type SimpleSOARProviderPayload = {
   name: string;
+  provider_kind: "splunk_soar" | "n8n" | "generic_http";
   base_url: string;
   auth_type: string;
   auth_token_type?: string;
@@ -150,6 +151,9 @@ export type SimpleSOARProviderPayload = {
   timeout_seconds: number;
   is_enabled: boolean;
   api_key?: string;
+  request_config?: Record<string, unknown>;
+  response_config?: Record<string, unknown>;
+  status_config?: Record<string, unknown>;
 };
 
 export type SimpleInvestigationTemplatePayload = {
@@ -174,6 +178,10 @@ export function buildSimpleSOARPayload(
   const authType = payload.auth_type || "none";
   const authTokenType = (payload.auth_token_type || "").trim();
   const authUsername = (payload.auth_username || "").trim();
+  const providerKind =
+    payload.provider_kind === "splunk_soar" || payload.provider_kind === "n8n"
+      ? payload.provider_kind
+      : "generic_http";
 
   const authConfig: Record<string, unknown> = {};
 
@@ -195,13 +203,13 @@ export function buildSimpleSOARPayload(
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 80),
-    provider_kind: "generic_http",
+    provider_kind: providerKind,
     base_url: payload.base_url,
     auth_type: authType,
     auth_config: authConfig,
-    request_config: {},
-    response_config: {},
-    status_config: {},
+    request_config: payload.request_config || {},
+    response_config: payload.response_config || {},
+    status_config: payload.status_config || {},
     verify_ssl: true,
     timeout_seconds: payload.timeout_seconds,
     is_enabled: payload.is_enabled,

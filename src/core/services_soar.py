@@ -305,17 +305,28 @@ def _build_launch_fields_payload(template: InvestigationTemplate, variables: dic
             payload[remote_template_field] = remote_template_code
 
     if target_object_field:
-        target_object_id = _first_launch_variable(
-            variables,
-            [
-                "target_object_id",
-                target_object_field,
-                "container_id",
-                "incident_id",
-                "case_id",
-                "object_id",
-            ],
-        )
+        target_object_keys = [
+            "target_object_id",
+            target_object_field,
+            "container_id",
+            "incident_id",
+            "case_id",
+            "object_id",
+        ]
+        template_defaults = template.default_variables or {}
+        target_object_id = ""
+
+        if isinstance(template_defaults, dict):
+            target_object_id = _first_launch_variable(
+                template_defaults,
+                target_object_keys,
+            )
+
+        if not target_object_id:
+            target_object_id = _first_launch_variable(
+                variables,
+                target_object_keys,
+            )
 
         if target_object_id:
             payload[target_object_field] = target_object_id
@@ -422,6 +433,8 @@ class SOARService:
         if isinstance(value, str):
             if value == "{variables}":
                 return copy.deepcopy(context.get("variables") or {})
+            if value == "{launch_payload}":
+                return copy.deepcopy(context.get("launch_payload") or {})
             if value == "{prompt}":
                 return context.get("prompt") or ""
             if value == "{provider_execution}":
@@ -476,6 +489,7 @@ class SOARService:
         remote_run_id: str = "",
         provider_execution: dict | None = None,
         launch_response: dict | None = None,
+        launch_payload: dict | None = None,
         run=None,
     ) -> dict:
         return {
@@ -491,6 +505,7 @@ class SOARService:
             "remote_run_id": remote_run_id or "",
             "provider_execution": copy.deepcopy(provider_execution or {}),
             "launch_response": copy.deepcopy(launch_response or {}),
+            "launch_payload": copy.deepcopy(launch_payload or {}),
             "secret": self._secret_context(),
             "run": {
                 "id": getattr(run, "id", ""),
@@ -737,7 +752,6 @@ class SOARService:
 
         return None
 
-
     def _build_template_launch_payload(self, *, template: InvestigationTemplate, variables: dict, prompt: str) -> dict:
         mapping = template.input_mapping or {}
         if not isinstance(mapping, dict):
@@ -756,12 +770,170 @@ class SOARService:
 
         return payload
 
+    def _build_splunk_soar_launch_request(
+        self,
+        *,
+        template: InvestigationTemplate,
+        launch_payload: dict,
+    ) -> dict:
+        playbook_id = stringify(template.remote_template_code).strip()
+        if not playbook_id:
+            raise ValidationError(
+                "Splunk SOAR playbook identifier is not configured."
+            )
 
+        execution_config = template.execution_config or {}
+        if not isinstance(execution_config, dict):
+            execution_config = {}
+        launch_fields = execution_config.get("launch_fields") or {}
+        if not isinstance(launch_fields, dict):
+            launch_fields = {}
 
-    def launch_execution(self, *, run, template: InvestigationTemplate, variables: dict, prompt: str) -> dict:
+        target_object_field = stringify(
+            launch_fields.get("target_object_field") or ""
+        ).strip()
+        if not target_object_field:
+            target_object_field = _infer_target_object_field(template) or "container_id"
+
+        target_object_id = _path_get(
+            launch_payload,
+            target_object_field,
+            None,
+        )
+
+        try:
+            if isinstance(target_object_id, bool):
+                raise ValueError
+            if isinstance(target_object_id, float) and not target_object_id.is_integer():
+                raise ValueError
+            container_id = int(target_object_id)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValidationError(
+                "Splunk SOAR container_id must be a positive integer."
+            ) from exc
+
+        if container_id <= 0:
+            raise ValidationError(
+                "Splunk SOAR container_id must be a positive integer."
+            )
+
+        body_template = {
+            "run": True,
+            "playbook_id": playbook_id,
+            "container_id": container_id,
+        }
+
+        scope = launch_payload.get("scope")
+        if scope not in (None, "", [], {}):
+            body_template["scope"] = copy.deepcopy(scope)
+
+        inputs = launch_payload.get("inputs")
+        if inputs not in (None, "", [], {}):
+            body_template["inputs"] = copy.deepcopy(inputs)
+
+        return {
+            "method": "POST",
+            "url_template": "{base_url}/rest/playbook_run",
+            "headers": {},
+            "body_template": body_template,
+        }
+
+    def _build_n8n_launch_request(
+        self,
+        *,
+        template: InvestigationTemplate,
+        launch_payload: dict,
+    ) -> dict:
+        webhook_path = stringify(template.remote_template_code).strip()
+        segments = webhook_path.split("/")
+
+        if (
+            not webhook_path
+            or "://" in webhook_path
+            or "?" in webhook_path
+            or "#" in webhook_path
+            or "\\" in webhook_path
+            or ".." in webhook_path
+            or any(not segment for segment in segments)
+        ):
+            raise ValidationError("n8n webhook path is invalid.")
+
+        return {
+            "method": "POST",
+            "url_template": f"{{base_url}}/webhook/{webhook_path}",
+            "headers": {},
+            "body_template": copy.deepcopy(launch_payload),
+        }
+
+    def _build_generic_launch_request(self, *, launch_payload: dict) -> dict:
         request_config = copy.deepcopy(self.provider.request_config or {})
         normalized_request_config = _normalize_request_config(request_config)
 
+        if not normalized_request_config:
+            raise ValidationError(
+                "Generic SOAR provider launch request is not configured."
+            )
+
+        body_template = normalized_request_config.get("body_template", None)
+
+        if body_template in (None, "", {}):
+            normalized_request_config["body_template"] = copy.deepcopy(launch_payload)
+        elif isinstance(body_template, dict):
+            body_template = copy.deepcopy(body_template)
+
+            if "payload" in body_template:
+                payload_template = body_template.get("payload")
+                if payload_template in ("{variables}", "{launch_payload}"):
+                    body_template["payload"] = "{launch_payload}"
+                elif isinstance(payload_template, dict):
+                    body_template["payload"] = {
+                        **copy.deepcopy(launch_payload),
+                        **payload_template,
+                    }
+                normalized_request_config["body_template"] = body_template
+            else:
+                normalized_request_config["body_template"] = {
+                    **copy.deepcopy(launch_payload),
+                    **body_template,
+                }
+
+        return normalized_request_config
+
+    def _build_provider_launch_request(
+        self,
+        *,
+        template: InvestigationTemplate,
+        launch_payload: dict,
+    ) -> dict:
+        provider_kind = stringify(self.provider.provider_kind).strip().lower()
+
+        if provider_kind == "splunk_soar":
+            return self._build_splunk_soar_launch_request(
+                template=template,
+                launch_payload=launch_payload,
+            )
+
+        if provider_kind == "n8n":
+            return self._build_n8n_launch_request(
+                template=template,
+                launch_payload=launch_payload,
+            )
+
+        if provider_kind in {"generic_http", "xsoar", "other"}:
+            return self._build_generic_launch_request(
+                launch_payload=launch_payload,
+            )
+
+        raise ValidationError("Unsupported SOAR provider kind.")
+
+    def launch_execution(
+        self,
+        *,
+        run,
+        template: InvestigationTemplate,
+        variables: dict,
+        prompt: str,
+    ) -> dict:
         if not (template.remote_template_code or template.code or template.name):
             raise ValidationError("Investigation template has no playbook identifier.")
 
@@ -769,10 +941,11 @@ class SOARService:
         if not isinstance(template_defaults, dict):
             template_defaults = {}
 
-        launch_variables = {
-            **copy.deepcopy(template_defaults),
-            **copy.deepcopy(variables or {}),
-        }
+        launch_variables = copy.deepcopy(template_defaults)
+
+        for key, value in (variables or {}).items():
+            if value not in (None, "", [], {}):
+                launch_variables[key] = copy.deepcopy(value)
 
         mapped_payload = self._build_template_launch_payload(
             template=template,
@@ -780,71 +953,49 @@ class SOARService:
             prompt=prompt or "",
         )
 
-        mapping_produced_payload = bool(mapped_payload)
+        launch_fields_payload = _build_launch_fields_payload(
+            template,
+            launch_variables,
+        )
 
-        if not mapping_produced_payload:
-            launch_fields_payload = _build_launch_fields_payload(
-                template,
-                launch_variables,
-            )
-
-            mapped_payload = {
-                **launch_fields_payload,
-                **mapped_payload,
-            }
-        else:
-            launch_fields_payload = {}
-
-        if not normalized_request_config:
-            normalized_request_config = {
-                "method": "POST",
-                "url_template": "{base_url}/rest/playbook_run",
-            }
+        launch_payload = {
+            **mapped_payload,
+            **launch_fields_payload,
+        }
 
         template_identifier_payload = {}
-        if not mapped_payload:
+        if not launch_payload:
             template_identifier_payload = _template_launch_identifier_payload(
                 provider=self.provider,
                 template=template,
-                mapped_payload=mapped_payload,
+                mapped_payload=launch_payload,
             )
 
-        default_payload = {
+        launch_payload = {
             **template_identifier_payload,
-            **mapped_payload,
+            **launch_payload,
         }
 
-        current_body_template = normalized_request_config.get("body_template", None)
+        _validate_required_launch_fields(template, launch_payload)
 
-        if current_body_template in (None, "", {}):
-            normalized_request_config["body_template"] = default_payload
-        elif isinstance(current_body_template, dict):
-            body_template = copy.deepcopy(current_body_template)
-
-            has_payload_container = "payload" in body_template
-
-            if has_payload_container:
-                normalized_request_config["body_template"] = body_template
-            else:
-                normalized_request_config["body_template"] = {
-                    **default_payload,
-                    **body_template,
-                }
+        normalized_request_config = self._build_provider_launch_request(
+            template=template,
+            launch_payload=launch_payload,
+        )
 
         context = self._build_context(
             template=template,
             variables=launch_variables,
             prompt=prompt or "",
+            launch_payload=launch_payload,
             run=run,
         )
 
-        preview_payload = self._render_value(
-            normalized_request_config.get("body_template"),
+        result = self._perform_request(
+            normalized_request_config,
             context,
+            default_method="POST",
         )
-        _validate_required_launch_fields(template, preview_payload)
-
-        result = self._perform_request(normalized_request_config, context, default_method="POST")
         response_payload = result["response"]
 
         external_run_id = self._extract_external_run_id(response_payload)
@@ -853,11 +1004,7 @@ class SOARService:
         return {
             "provider_kind": self.provider.provider_kind,
             "external_run_id": external_run_id,
-            "remote_template_code": (
-                launch_variables.get("playbook_id")
-                or launch_variables.get("playbook_name")
-                or template.remote_template_code
-            ),
+            "remote_template_code": template.remote_template_code,
             "started_at": timezone.now().isoformat(),
             "status": remote_status,
             "variables": copy.deepcopy(launch_variables),
