@@ -36,6 +36,7 @@ import {
   RightButton,
   ClearButton,
   PlayButton,
+  RefreshButton,
   Search, 
   SlidersHorizontal, 
   ChevronUp, 
@@ -262,6 +263,8 @@ export default function Alerts() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [newAlertCount, setNewAlertCount] = useState(0);
+  const newAlertBaselineRef = useRef<{ scopeKey: string; createdAfter: string } | null>(null);
 
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -456,10 +459,8 @@ export default function Alerts() {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const alertQueryParams = useMemo(
+  const alertScopeParams = useMemo(
     () => ({
-      page,
-      page_size: pageSize,
       search: search || undefined,
       customer,
       status,
@@ -467,11 +468,8 @@ export default function Alerts() {
       severity,
       classification,
       outcome,
-      ordering,
     }),
     [
-      page,
-      pageSize,
       search,
       customer,
       status,
@@ -479,9 +477,37 @@ export default function Alerts() {
       severity,
       classification,
       outcome,
-      ordering,
     ]
   );
+
+  const alertScopeKey = useMemo(
+    () => JSON.stringify(alertScopeParams),
+    [alertScopeParams]
+  );
+
+  const alertQueryParams = useMemo(
+    () => ({
+      ...alertScopeParams,
+      page,
+      page_size: pageSize,
+      ordering,
+    }),
+    [alertScopeParams, ordering, page, pageSize]
+  );
+
+  async function resetNewAlertBaseline() {
+    const data = await fetchAlerts({
+      ...alertScopeParams,
+      page: 1,
+      ordering: "-created_at",
+    });
+    const newestCreatedAt = asArray<AlertListItem>(data?.results)[0]?.created_at;
+    newAlertBaselineRef.current = {
+      scopeKey: alertScopeKey,
+      createdAfter: newestCreatedAt || new Date().toISOString(),
+    };
+    setNewAlertCount(0);
+  }
 
   async function refreshAlertsPage() {
     setLoading(true);
@@ -491,11 +517,13 @@ export default function Alerts() {
       const data: any = await fetchAlerts(alertQueryParams);
       setItems(asArray<AlertListItem>(data?.results));
       setServerCount(Number(data?.count ?? 0));
+      return true;
     } catch (e: any) {
       const msg = e?.response?.status
         ? `API error (${e.response.status})`
         : "Network error";
       setError(msg);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -528,6 +556,58 @@ export default function Alerts() {
       alive = false;
     };
   }, [alertQueryParams]);
+
+  useEffect(() => {
+    let alive = true;
+    let checking = false;
+
+    fetchAlerts({
+      ...alertScopeParams,
+      page: 1,
+      ordering: "-created_at",
+    })
+      .then((data) => {
+        if (!alive) return;
+        const newestCreatedAt = asArray<AlertListItem>(data?.results)[0]?.created_at;
+        newAlertBaselineRef.current = {
+          scopeKey: alertScopeKey,
+          createdAfter: newestCreatedAt || new Date().toISOString(),
+        };
+        setNewAlertCount(0);
+      })
+      .catch(() => {
+        if (!alive) return;
+        newAlertBaselineRef.current = null;
+        setNewAlertCount(0);
+      });
+
+    const timer = window.setInterval(async () => {
+      const baseline = newAlertBaselineRef.current;
+      if (!alive || checking || !baseline || baseline.scopeKey !== alertScopeKey) return;
+
+      checking = true;
+      try {
+        const data = await fetchAlerts({
+          ...alertScopeParams,
+          page: 1,
+          ordering: "-created_at",
+          created_after: baseline.createdAfter,
+        });
+        if (alive && newAlertBaselineRef.current?.scopeKey === alertScopeKey) {
+          setNewAlertCount(Math.max(0, Number(data?.count ?? 0)));
+        }
+      } catch {
+        if (!alive) return;
+      } finally {
+        checking = false;
+      }
+    }, 30000);
+
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [alertScopeKey, alertScopeParams]);
 
 
   const outcomeDropdownOptions = useMemo<MultiSelectComboboxOption[]>(
@@ -812,8 +892,40 @@ export default function Alerts() {
           </div>
         </div>
 
-        <div className="text-xs text-muted-foreground">
-          Creation is API-only
+        <div className="flex self-end items-center gap-2 xl:self-auto">
+          <div className="text-xs italic text-muted-foreground">
+            Creation is API-only
+          </div>
+          <div className="relative inline-flex">
+            <RefreshButton
+              type="button"
+              disabled={loading}
+              loading={loading}
+              title={
+                newAlertCount > 0
+                  ? `Refresh alerts (${newAlertCount} new)`
+                  : "Refresh alerts"
+              }
+              onClick={async () => {
+                const refreshed = await refreshAlertsPage();
+                if (refreshed) {
+                  try {
+                    await resetNewAlertBaseline();
+                  } catch {
+                    setNewAlertCount(0);
+                  }
+                }
+              }}
+            />
+            {newAlertCount > 0 ? (
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute -right-1.5 -top-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white shadow-sm ring-2 ring-background"
+              >
+                {newAlertCount > 99 ? "99+" : newAlertCount}
+              </span>
+            ) : null}
+          </div>
         </div>
       </div>
 

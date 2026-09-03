@@ -66,6 +66,35 @@ class DokoSecurityAndFunctionTests(APITestCase):
         self.assertEqual(self.client.delete(f"/api/cases/{case_id}/").status_code, 204)
         self.assertFalse(Case.objects.filter(id=case_id).exists())
 
+    def test_alert_list_filters_alerts_created_after_timestamp(self):
+        self.grant(self.user_a, self.customer_a, "alert.view")
+        self.authenticate(self.user_a)
+
+        older = Alert.objects.create(
+            title="Older alert",
+            description="Older description",
+            customer=self.customer_a,
+            owner=self.user_a,
+        )
+        threshold = timezone.now()
+        newer = Alert.objects.create(
+            title="Newer alert",
+            description="Newer description",
+            customer=self.customer_a,
+            owner=self.user_a,
+        )
+
+        response = self.client.get(
+            "/api/alerts/",
+            {"created_after": threshold.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data.get("results", response.data)
+        ids = {str(item["id"]) for item in results}
+        self.assertNotIn(str(older.id), ids)
+        self.assertIn(str(newer.id), ids)
+
     def test_legacy_event_routes_remain_operational(self):
         admin = User.objects.create_user(
             username="legacy-event-admin",

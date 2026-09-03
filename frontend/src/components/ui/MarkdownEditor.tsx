@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   MDXEditor,
   BoldItalicUnderlineToggles,
@@ -158,11 +158,25 @@ function markdownForMdxEditor(value: string) {
 
 export default function MarkdownEditor(props: Props) {
   const editorRef = useRef<MDXEditorMethods | null>(null);
+  const synchronizedEditorRef = useRef<MDXEditorMethods | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const lastValueRef = useRef(props.value || "");
   const focusedRef = useRef(false);
   const skipNextBlurRef = useRef(false);
+  const applyingExternalValueRef = useRef(true);
+  const failedValueRef = useRef("");
+  const parseFailureScheduledRef = useRef(false);
+  const [editorReady, setEditorReady] = useState(false);
+  const [parseFailed, setParseFailed] = useState(false);
   const [toolbarVisible, setToolbarVisible] = useState(false);
+
+  const attachEditor = useCallback((editor: MDXEditorMethods | null) => {
+    editorRef.current = editor;
+    if (!editor) {
+      synchronizedEditorRef.current = null;
+    }
+    setEditorReady(!!editor);
+  }, []);
 
 
   const plugins = useMemo(
@@ -220,16 +234,43 @@ export default function MarkdownEditor(props: Props) {
     const nextValue = props.value || "";
     const root = rootRef.current;
     const activeElement = document.activeElement;
+    const editor = editorRef.current;
 
     if (focusedRef.current) return;
 
     if (root && activeElement && root.contains(activeElement)) return;
 
-    if (nextValue !== lastValueRef.current) {
+    if (!editor) return;
+
+    if (
+      synchronizedEditorRef.current !== editor ||
+      nextValue !== lastValueRef.current
+    ) {
+      applyingExternalValueRef.current = true;
       lastValueRef.current = nextValue;
-      editorRef.current?.setMarkdown(markdownForMdxEditor(nextValue));
+      editor.setMarkdown(markdownForMdxEditor(nextValue));
+      synchronizedEditorRef.current = editor;
+
+      const frame = window.requestAnimationFrame(() => {
+        applyingExternalValueRef.current = false;
+      });
+
+      return () => {
+        window.cancelAnimationFrame(frame);
+        applyingExternalValueRef.current = false;
+      };
     }
-  }, [props.value]);
+
+    applyingExternalValueRef.current = false;
+  }, [editorReady, props.value]);
+
+  useEffect(() => {
+    if (!parseFailed || focusedRef.current) return;
+    if ((props.value || "") === failedValueRef.current) return;
+
+    applyingExternalValueRef.current = true;
+    setParseFailed(false);
+  }, [parseFailed, props.value]);
 
 
 
@@ -806,19 +847,44 @@ export default function MarkdownEditor(props: Props) {
       `}
     </style>
 
-      <MDXEditor
-        ref={editorRef}
-        markdown={markdownForMdxEditor(props.value || "")}
-        readOnly={!!props.disabled}
-        placeholder={props.placeholder}
-        onChange={(value) => {
-          const nextValue = value || "";
-          lastValueRef.current = nextValue;
-          props.onChange(nextValue);
-        }}
-        contentEditableClassName="min-h-[140px] px-4 py-3 text-sm text-foreground outline-none"
-        plugins={plugins}
-      />
+      {parseFailed ? (
+        <textarea
+          value={props.value || ""}
+          readOnly={!!props.disabled}
+          placeholder={props.placeholder}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            failedValueRef.current = nextValue;
+            lastValueRef.current = nextValue;
+            props.onChange(nextValue);
+          }}
+          className="min-h-[140px] w-full resize-y border-0 bg-transparent px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+        />
+      ) : (
+        <MDXEditor
+          ref={attachEditor}
+          markdown={markdownForMdxEditor(props.value || "")}
+          readOnly={!!props.disabled}
+          placeholder={props.placeholder}
+          onChange={(value) => {
+            if (applyingExternalValueRef.current) return;
+            const nextValue = value || "";
+            lastValueRef.current = nextValue;
+            props.onChange(nextValue);
+          }}
+          onError={() => {
+            if (parseFailureScheduledRef.current) return;
+            parseFailureScheduledRef.current = true;
+            failedValueRef.current = props.value || "";
+            window.queueMicrotask(() => {
+              setParseFailed(true);
+              parseFailureScheduledRef.current = false;
+            });
+          }}
+          contentEditableClassName="min-h-[140px] px-4 py-3 text-sm text-foreground outline-none"
+          plugins={plugins}
+        />
+      )}
     </div>
   );
 }

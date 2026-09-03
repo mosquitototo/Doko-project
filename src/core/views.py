@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.shortcuts import get_object_or_404
 from django.db.models import Case as DbCase, When, Value, IntegerField, Max, OuterRef, Subquery, DateTimeField, CharField, BooleanField, Q, F, Count
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.utils.timezone import localtime
 from django.db.models.functions import Coalesce, Greatest
 from django.db import transaction, IntegrityError
@@ -862,6 +863,15 @@ class AlertListCreateView(generics.ListCreateAPIView):
         if not user.is_staff:
             customer_ids = get_permitted_customer_ids(user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
+
+        created_after_raw = (self.request.query_params.get("created_after") or "").strip()
+        if created_after_raw:
+            created_after = parse_datetime(created_after_raw)
+            if created_after is None:
+                raise ValidationError({"created_after": "Expected an ISO 8601 timestamp."})
+            if timezone.is_naive(created_after):
+                created_after = timezone.make_aware(created_after, dt_timezone.utc)
+            qs = qs.filter(created_at__gt=created_after)
 
         search = (self.request.query_params.get("search") or "").strip()
         if search:

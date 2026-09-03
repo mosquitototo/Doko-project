@@ -61,6 +61,7 @@ export async function fetchAlerts(params: {
   customer?: string[];
   page_size?: number;
   ordering?: string;
+  created_after?: string;
 } = {}): Promise<Paginated<AlertListItem>> {
   const res = await api.get("/api/alerts/", {
     params: {
@@ -74,6 +75,7 @@ export async function fetchAlerts(params: {
       owner: params.owner?.length ? params.owner : undefined,
       customer: params.customer?.length ? params.customer : undefined,
       ordering: params.ordering || undefined,
+      created_after: params.created_after || undefined,
     },
     paramsSerializer: {
       indexes: null,
