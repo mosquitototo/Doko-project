@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from core.audit import sanitize_audit_metadata
 from core.crypto_secrets import encrypt_secret
-from core.models import AIProvider, Alert, AlertComment, AuditLog, AutomationExecutionLog, AutomationRule, Case, CaseExchange, ChatContextSnapshot, ChatGeneratedDraft, ChatMessage, ChatRun, ChatSession, Comment, ConnectorAllowlistDomain, ConnectorEndpoint, ConnectorInstance, ConnectorResult, Customer, CustomerAccess, Hunt, HuntJournalEntry, InstanceProxySettings, InstanceSplunkHecSettings, InvestigationTemplate, Permission, Role, Severity, Classification, SOARProvider, Task, UserRole, WorkbookInstance, WorkbookTemplate, WorkbookTemplateItem
+from core.models import AIProvider, Alert, AlertComment, AuditLog, AutomationExecutionLog, AutomationRule, Case, CaseExchange, ChatActionRun, ChatContextSnapshot, ChatGeneratedDraft, ChatMessage, ChatRun, ChatSession, Comment, ConnectorAllowlistDomain, ConnectorEndpoint, ConnectorInstance, ConnectorResult, Customer, CustomerAccess, Hunt, HuntJournalEntry, InstanceProxySettings, InstanceSplunkHecSettings, InvestigationTemplate, Permission, Role, Severity, Classification, SOARProvider, Task, UserRole, WorkbookInstance, WorkbookTemplate, WorkbookTemplateItem
 from core.outbound_proxy import build_outbound_proxies
 from core.rbac import get_permitted_customer_ids, user_has_perm
 from core.serializers_chat import ChatSessionSerializer
@@ -94,6 +94,197 @@ class DokoSecurityAndFunctionTests(APITestCase):
         ids = {str(item["id"]) for item in results}
         self.assertNotIn(str(older.id), ids)
         self.assertIn(str(newer.id), ids)
+
+    def test_primary_lists_honor_page_size_and_keep_filtered_count(self):
+        admin = User.objects.create_user(
+            username="pagination-admin",
+            password="StrongPass-Pagination!",
+            is_staff=True,
+        )
+        self.authenticate(admin)
+
+        for index in range(7):
+            Alert.objects.create(
+                title=f"Open alert {index}",
+                customer=self.customer_a,
+                status=Alert.Status.OPEN,
+            )
+            Case.objects.create(
+                title=f"Open case {index}",
+                customer=self.customer_a,
+                status=Case.Status.OPEN,
+            )
+            Hunt.objects.create(
+                title=f"Open hunt {index}",
+                customer=self.customer_a,
+                status=Hunt.Status.TO_DO,
+            )
+
+        Alert.objects.create(
+            title="Closed alert",
+            customer=self.customer_a,
+            status=Alert.Status.CLOSED,
+        )
+        Case.objects.create(
+            title="Closed case",
+            customer=self.customer_a,
+            status=Case.Status.CLOSED,
+        )
+        Hunt.objects.create(
+            title="Completed hunt",
+            customer=self.customer_a,
+            status=Hunt.Status.COMPLETED,
+        )
+
+        requests = (
+            ("/api/alerts/", {"status": Alert.Status.OPEN, "page_size": 5}),
+            ("/api/cases/", {"status": Case.Status.OPEN, "page_size": 5}),
+            ("/api/hunts/", {"status": Hunt.Status.TO_DO, "page_size": 5}),
+        )
+
+        for path, params in requests:
+            with self.subTest(path=path):
+                response = self.client.get(path, params)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data["count"], 7)
+                self.assertEqual(len(response.data["results"]), 5)
+
+    @patch(
+        "core.services_chat.poll_soar_execution",
+        return_value={"status": "running", "poll_response": {}},
+    )
+    def test_chat_run_detail_is_read_only_while_worker_waits_for_soar(self, poll_soar):
+        self.grant(self.user_a, self.customer_a, "chat.use")
+        self.authenticate(self.user_a)
+        ai_provider = AIProvider.objects.create(
+            name="Read-only run provider",
+            code="read-only-run-provider",
+            base_url="http://127.0.0.1:1/v1",
+            default_model="test",
+        )
+        soar_provider = SOARProvider.objects.create(
+            name="Read-only SOAR provider",
+            code="read-only-soar-provider",
+            base_url="https://soar.example.test",
+            auth_type="none",
+        )
+        template = InvestigationTemplate.objects.create(
+            code="read-only-template",
+            name="Read-only template",
+            entity_type="ip",
+            target_kind="single",
+            soar_provider=soar_provider,
+            remote_template_code="investigate",
+        )
+        session = ChatSession.objects.create(user=self.user_a, client_tab_id="read-only-run")
+        snapshot = ChatContextSnapshot.objects.create(
+            session=session,
+            user=self.user_a,
+            context_payload={},
+        )
+        run = ChatRun.objects.create(
+            session=session,
+            snapshot=snapshot,
+            user=self.user_a,
+            provider=ai_provider,
+            request_id="read-only-request",
+            client_tab_id="read-only-run",
+            prompt="/investigate 203.0.113.10",
+            status="running",
+            provider_execution={"external_run_id": "remote-1"},
+        )
+        ChatActionRun.objects.create(
+            run=run,
+            template=template,
+            status="running",
+            remote_run_id="remote-1",
+            remote_status="running",
+        )
+
+        response = self.client.get(f"/api/chat/runs/{run.id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["status"], "running")
+        poll_soar.assert_not_called()
+
+    @patch("core.services_chat.time.sleep")
+    @patch("core.services_chat.collect_soar_result", return_value={"result": "completed"})
+    @patch(
+        "core.services_chat.poll_soar_execution",
+        return_value={"status": "completed", "poll_response": {"status": "completed"}},
+    )
+    @patch(
+        "core.services_chat.launch_soar_execution",
+        return_value={
+            "external_run_id": "remote-worker-1",
+            "status": "running",
+            "launch_request": {"method": "POST"},
+            "launch_response": {"status": "running"},
+        },
+    )
+    @patch("core.services_chat.LLMService.generate", return_value="Final SOAR response")
+    def test_worker_waits_for_soar_and_publishes_one_final_chat_response(
+        self,
+        generate,
+        _launch,
+        _poll,
+        _collect,
+        _sleep,
+    ):
+        ai_provider = AIProvider.objects.create(
+            name="Worker wait provider",
+            code="worker-wait-provider",
+            base_url="http://127.0.0.1:1/v1",
+            default_model="test",
+        )
+        soar_provider = SOARProvider.objects.create(
+            name="Worker wait SOAR",
+            code="worker-wait-soar",
+            provider_kind="splunk_soar",
+            base_url="https://soar.example.test",
+            auth_type="none",
+            timeout_seconds=30,
+        )
+        InvestigationTemplate.objects.create(
+            code="worker-wait-template",
+            name="Worker wait template",
+            entity_type="ip",
+            target_kind="single",
+            chat_command="/worker_wait",
+            soar_provider=soar_provider,
+            remote_template_code="local/worker_wait",
+        )
+        session = ChatSession.objects.create(user=self.user_a, client_tab_id="worker-wait")
+        snapshot = ChatContextSnapshot.objects.create(
+            session=session,
+            user=self.user_a,
+            context_payload={},
+        )
+        run = ChatRun.objects.create(
+            session=session,
+            snapshot=snapshot,
+            user=self.user_a,
+            provider=ai_provider,
+            request_id="worker-wait-request",
+            client_tab_id="worker-wait",
+            prompt="203.0.113.10",
+            provider_execution={
+                "request_hints": {
+                    "chat_command": "/worker_wait",
+                    "variables": {"doko_output": "203.0.113.10"},
+                }
+            },
+        )
+
+        execute_chat_run(run)
+
+        run.refresh_from_db()
+        messages = list(ChatMessage.objects.filter(session=session, role="assistant"))
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(run.response_text, "Final SOAR response")
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0].metadata["message_kind"], "chat_response")
 
     def test_legacy_event_routes_remain_operational(self):
         admin = User.objects.create_user(
@@ -827,7 +1018,7 @@ class DokoSecurityAndFunctionTests(APITestCase):
             remote_status="running",
         )
 
-        def complete_action(current_action):
+        def complete_action(current_action, **_kwargs):
             current_action.status = "completed"
             current_action.remote_status = "success"
             current_action.output_payload = {"outputs": ["result"]}
@@ -842,7 +1033,57 @@ class DokoSecurityAndFunctionTests(APITestCase):
         ) as refresh_action:
             result = _wait_for_action_completion(run, action)
 
-        refresh_action.assert_called_once_with(action)
+        refresh_action.assert_called_once_with(action, publish_result=False)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.output_payload, {"outputs": ["result"]})
+
+    def test_explicit_n8n_chat_command_waits_with_provider_defaults(self):
+        provider = SOARProvider(
+            name="n8n",
+            code="n8n-command-wait",
+            provider_kind="n8n",
+            base_url="https://n8n.example.test",
+            auth_type="none",
+            timeout_seconds=30,
+        )
+        template = InvestigationTemplate(
+            code="n8n-user-activity-wait",
+            name="n8n user activity wait",
+            entity_type="user",
+            target_kind="single",
+            soar_provider=provider,
+            remote_template_code="user-activity",
+            execution_mode="provider_default",
+            execution_config={},
+        )
+        run = Mock(
+            provider_execution={
+                "request_hints": {"chat_command": "/user_activity"},
+            },
+        )
+        action = Mock(
+            template=template,
+            status="running",
+            remote_run_id="n8n-run-1",
+            remote_status="running",
+        )
+
+        def complete_action(current_action, **_kwargs):
+            current_action.status = "completed"
+            current_action.remote_status = "success"
+            current_action.output_payload = {"outputs": ["result"]}
+            return current_action
+
+        with patch("core.services_chat.time.sleep"), patch(
+            "core.services_chat._refresh_run_or_raise_cancelled",
+            return_value=run,
+        ), patch(
+            "core.services_chat.refresh_chat_action_run",
+            side_effect=complete_action,
+        ) as refresh_action:
+            result = _wait_for_action_completion(run, action)
+
+        self.assertEqual(refresh_action.call_count, 1)
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.output_payload, {"outputs": ["result"]})
 

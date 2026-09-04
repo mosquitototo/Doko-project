@@ -46,6 +46,7 @@ import MultiSelectCombobox, {
   type MultiSelectComboboxOption,
 } from "../components/ui/MultiSelectCombobox";
 import SelectField from "../components/ui/SelectField";
+import { pageAfterDeletion } from "../utils/pagination";
 
 function formatDate(iso: string) {
   try {
@@ -509,12 +510,15 @@ export default function Alerts() {
     setNewAlertCount(0);
   }
 
-  async function refreshAlertsPage() {
+  async function refreshAlertsPage(pageOverride = page) {
     setLoading(true);
     setError(null);
 
     try {
-      const data: any = await fetchAlerts(alertQueryParams);
+      const data: any = await fetchAlerts({
+        ...alertQueryParams,
+        page: pageOverride,
+      });
       setItems(asArray<AlertListItem>(data?.results));
       setServerCount(Number(data?.count ?? 0));
       return true;
@@ -706,6 +710,13 @@ export default function Alerts() {
 
     setBusyAction(true);
     try {
+      const deletedCount = selectedIds.length;
+      const targetPage = pageAfterDeletion({
+        currentPage: page,
+        totalCount: serverCount,
+        deletedCount,
+        pageSize,
+      });
       await Promise.all(selectedIds.map((id) => deleteAlert(id)));
 
       push({ kind: "success", title: "Alerts deleted" });
@@ -714,8 +725,12 @@ export default function Alerts() {
         asArray<AlertListItem>(prev).filter((x) => !selected?.[x.id])
       );
       setSelected({});
-      setServerCount((prev) => Math.max(0, prev - selectedIds.length));
-      void refreshAlertsPage();
+      setServerCount((prev) => Math.max(0, prev - deletedCount));
+      if (targetPage !== page) {
+        setPage(targetPage);
+      } else {
+        await refreshAlertsPage(targetPage);
+      }
     } catch (e: any) {
       push({
         kind: "error",
@@ -1695,13 +1710,23 @@ export default function Alerts() {
 
           setBusyAction(true);
           try {
+            const targetPage = pageAfterDeletion({
+              currentPage: page,
+              totalCount: serverCount,
+              deletedCount: 1,
+              pageSize,
+            });
             await deleteAlert(target.id);
             push({ kind: "success", title: "Alert deleted" });
             setItems((prev) =>
               asArray<AlertListItem>(prev).filter((x) => x.id !== target.id)
             );
             setServerCount((prev) => Math.max(0, prev - 1));
-            void refreshAlertsPage();
+            if (targetPage !== page) {
+              setPage(targetPage);
+            } else {
+              await refreshAlertsPage(targetPage);
+            }
           } catch (e: any) {
             push({
               kind: "error",

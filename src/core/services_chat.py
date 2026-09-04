@@ -682,32 +682,15 @@ def _resolve_action_state(template: InvestigationTemplate, remote_status: str) -
 
 def _wait_for_action_completion(run: ChatRun, action: ChatActionRun) -> ChatActionRun:
     execution_config = action.template.execution_config or {}
-    configured_mode = str(action.template.execution_mode or "provider_default").strip().lower()
-    mode = str(execution_config.get("mode") or "").strip().lower()
-    request_hints = _get_request_hints(run)
-    explicit_chat_command = str(request_hints.get("chat_command") or "").strip()
-    provider_kind = str(action.template.soar_provider.provider_kind or "").strip().lower()
-    uses_splunk_default_polling = (
-        bool(explicit_chat_command)
-        and provider_kind == "splunk_soar"
-        and configured_mode == "provider_default"
-        and not mode
-    )
-    if configured_mode == "async":
-        mode = "async_poll"
-    elif configured_mode == "sync":
-        mode = "sync"
-    elif uses_splunk_default_polling:
-        mode = "async_poll"
-
-    if mode != "async_poll":
+    if action.status != "running" or not action.remote_run_id:
         return action
 
-    timeout_seconds = int(execution_config.get("timeout_seconds") or 0)
+    timeout_seconds = int(
+        execution_config.get("timeout_seconds")
+        or action.template.soar_provider.timeout_seconds
+        or 90
+    )
     poll_interval_seconds = int(execution_config.get("poll_interval_seconds") or 3)
-
-    if timeout_seconds <= 0 and uses_splunk_default_polling:
-        timeout_seconds = int(action.template.soar_provider.timeout_seconds or 90)
 
     if timeout_seconds <= 0:
         return action
@@ -718,7 +701,7 @@ def _wait_for_action_completion(run: ChatRun, action: ChatActionRun) -> ChatActi
         time.sleep(max(1, poll_interval_seconds))
         run = _refresh_run_or_raise_cancelled(run)
         action.refresh_from_db()
-        action = refresh_chat_action_run(action)
+        action = refresh_chat_action_run(action, publish_result=False)
         action.refresh_from_db()
 
         if action.status == "running":
@@ -922,7 +905,11 @@ def _publish_action_result_message(action: ChatActionRun) -> None:
     action.run.save(update_fields=["response_text", "updated_at"])
 
 
-def refresh_chat_action_run(action: ChatActionRun) -> ChatActionRun:
+def refresh_chat_action_run(
+    action: ChatActionRun,
+    *,
+    publish_result: bool = True,
+) -> ChatActionRun:
     if action.status not in {"queued", "running"}:
         return action
 
@@ -997,7 +984,8 @@ def refresh_chat_action_run(action: ChatActionRun) -> ChatActionRun:
                 "updated_at",
             ]
         )
-        _publish_action_result_message(action)
+        if publish_result:
+            _publish_action_result_message(action)
         return action
 
     if next_status == "failed":

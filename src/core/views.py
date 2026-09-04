@@ -112,6 +112,7 @@ from .serializers import (
 )
 
 from .permissions import HasPermissionCode
+from .pagination import PrimaryListPagination
 from .rbac import get_user_permission_codes_for_display, get_accessible_customer_ids, get_permitted_customer_ids, is_doko_admin, user_has_perm
 from .reports_engine import render_report_html, safe_report_url_fetcher
 from .outbound_proxy import build_outbound_proxies
@@ -846,6 +847,7 @@ class UserLiteListView(generics.ListAPIView):
 class AlertListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     serializer_class = AlertSerializer
+    pagination_class = PrimaryListPagination
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "alert.view" if request.method == "GET" else "alert.add"
@@ -1848,6 +1850,7 @@ class CaseListCreateView(generics.ListCreateAPIView):
     serializer_class = CaseSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
     filter_backends = []
+    pagination_class = PrimaryListPagination
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "case.view" if request.method == "GET" else "case.add"
@@ -4743,6 +4746,7 @@ def _get_hunt_for_user_or_404(request, **filters):
 
 class HuntListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
+    pagination_class = PrimaryListPagination
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "hunt.view" if request.method == "GET" else "hunt.create"

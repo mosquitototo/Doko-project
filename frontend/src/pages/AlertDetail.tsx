@@ -1051,7 +1051,7 @@ export default function AlertDetail() {
             />
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-3">
+          <div className="mt-2 flex flex-wrap items-center gap-3 xl:mt-[72px]">
             <div className="flex items-center gap-2">
               <Info className="size-4 text-muted-foreground" />
               <InlineEditableBadge

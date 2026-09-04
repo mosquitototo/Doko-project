@@ -40,6 +40,7 @@ import MultiSelectCombobox, {
   type MultiSelectComboboxOption,
 } from "../components/ui/MultiSelectCombobox";
 import SelectField from "../components/ui/SelectField";
+import { pageAfterDeletion } from "../utils/pagination";
 
 function formatDate(iso: string) {
   try {
@@ -338,12 +339,15 @@ export default function Tickets() {
     ]
   );
 
-  async function refreshCasesPage() {
+  async function refreshCasesPage(pageOverride = page) {
     setLoading(true);
     setError(null);
 
     try {
-      const data = await fetchTickets(caseQueryParams);
+      const data = await fetchTickets({
+        ...caseQueryParams,
+        page: pageOverride,
+      });
       setItems(Array.isArray(data?.results) ? data.results : []);
       setServerCount(Number(data?.count ?? 0));
     } catch (e: any) {
@@ -544,12 +548,23 @@ export default function Tickets() {
 
     setBusyBulkAction(true);
     try {
+      const deletedCount = selectedIds.length;
+      const targetPage = pageAfterDeletion({
+        currentPage: page,
+        totalCount: serverCount,
+        deletedCount,
+        pageSize,
+      });
       await Promise.all(selectedIds.map((id) => deleteCase(id)));
       push({ kind: "success", title: "Cases deleted" });
       setItems((prev) => prev.filter((x) => !selected?.[x.id]));
       setSelected({});
-      setServerCount((prev) => Math.max(0, prev - selectedIds.length));
-      void refreshCasesPage();
+      setServerCount((prev) => Math.max(0, prev - deletedCount));
+      if (targetPage !== page) {
+        setPage(targetPage);
+      } else {
+        await refreshCasesPage(targetPage);
+      }
     } catch (e: any) {
       push({
         kind: "error",
@@ -1109,11 +1124,21 @@ export default function Tickets() {
 
           setBusyDeleteId(target.id);
           try {
+            const targetPage = pageAfterDeletion({
+              currentPage: page,
+              totalCount: serverCount,
+              deletedCount: 1,
+              pageSize,
+            });
             await deleteCase(target.id);
             push({ kind: "success", title: "Case deleted" });
             setItems((prev) => prev.filter((x) => x.id !== target.id));
             setServerCount((prev) => Math.max(0, prev - 1));
-            void refreshCasesPage();
+            if (targetPage !== page) {
+              setPage(targetPage);
+            } else {
+              await refreshCasesPage(targetPage);
+            }
           } catch (e: any) {
             push({
               kind: "error",

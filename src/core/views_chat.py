@@ -10,7 +10,7 @@ from django.utils import timezone
 from .models import ChatGeneratedDraft, ChatRun, ChatSession, InvestigationTemplate
 from .rbac import user_has_perm, get_accessible_customer_ids
 from .serializers_chat import ChatRunSerializer, ChatSessionSerializer
-from .services_chat import create_chat_run, generate_comment_draft, refresh_chat_run_actions
+from .services_chat import create_chat_run, generate_comment_draft
 from .services_chat_posting import post_generated_draft, user_has_draft_target_permission
 from .celerytasks import execute_chat_run_task
 
@@ -249,8 +249,6 @@ class ChatRunDetailView(APIView):
         if not run:
             return Response({"detail": "Run not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        refresh_chat_run_actions(run)
-        run.refresh_from_db()
         return Response(ChatRunSerializer(run).data)
 
 

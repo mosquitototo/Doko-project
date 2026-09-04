@@ -268,15 +268,18 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
   useEffect(() => {
     if (!run || (run.status !== "queued" && run.status !== "running")) return;
 
-    const timer = window.setInterval(async () => {
+    let stopped = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
       try {
         const refreshed = await fetchChatRun(run.id);
+        if (stopped) return;
         setRun(refreshed);
 
         if (
           refreshed.status === "completed" &&
-          refreshed.response_text &&
-          activeSession
+          refreshed.response_text
         ) {
           setActiveSession((prev) => {
             if (!prev) return prev;
@@ -306,15 +309,24 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
         }
 
         if (["completed", "failed", "cancelled"].includes(refreshed.status)) {
-          window.clearInterval(timer);
+          return;
         }
       } catch {
-        window.clearInterval(timer);
+        return;
       }
-    }, 1500);
 
-    return () => window.clearInterval(timer);
-  }, [run?.id, run?.status, activeSession]);
+      if (!stopped) {
+        timer = window.setTimeout(poll, 1500);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1500);
+
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [run?.id, run?.status]);
 
   useEffect(() => {
     if (!props.open) return;
@@ -814,18 +826,11 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
           </div>
 
           <div className="flex items-center justify-between gap-3">
-              <div className="text-[11px] text-muted-foreground">
-                Enter to send · Shift+Enter for a new line
-              </div>
+            <div className="text-[11px] text-muted-foreground">
+              Enter to send · Shift+Enter for a new line
+            </div>
 
-              <SendButton
-                iconOnly={false}
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={isGenerating || !prompt.trim()}
-                className="rounded-xl"
-                title={isGenerating ? "Sending..." : "Send"}
-              />
+            <div className="flex items-center gap-2">
               {isGenerating ? (
                 <CancelButton
                   type="button"
@@ -836,8 +841,17 @@ export default function GlobalChatDrawer(props: GlobalChatDrawerProps) {
                   {run?.cancel_requested ? "Cancelling..." : "Cancel"}
                 </CancelButton>
               ) : null}
+              <SendButton
+                iconOnly={false}
+                type="button"
+                onClick={() => void handleSend()}
+                disabled={isGenerating || !prompt.trim()}
+                className="rounded-xl"
+                title={isGenerating ? "Sending..." : "Send"}
+              />
             </div>
           </div>
+        </div>
         </div>
       </aside>
     </>

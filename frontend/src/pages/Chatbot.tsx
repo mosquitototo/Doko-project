@@ -241,15 +241,18 @@ export default function ChatbotPage() {
   useEffect(() => {
     if (!run || (run.status !== "queued" && run.status !== "running")) return;
 
-    const timer = window.setInterval(async () => {
+    let stopped = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
       try {
         const refreshed = await fetchChatRun(run.id);
+        if (stopped) return;
         setRun(refreshed);
 
         if (
           refreshed.status === "completed" &&
-          refreshed.response_text &&
-          activeSession
+          refreshed.response_text
         ) {
           setActiveSession((prev) => {
             if (!prev) return prev;
@@ -278,15 +281,24 @@ export default function ChatbotPage() {
         }
 
         if (["completed", "failed", "cancelled"].includes(refreshed.status)) {
-          window.clearInterval(timer);
+          return;
         }
       } catch {
-        window.clearInterval(timer);
+        return;
       }
-    }, 1500);
 
-    return () => window.clearInterval(timer);
-  }, [run?.id, run?.status, activeSession]);
+      if (!stopped) {
+        timer = window.setTimeout(poll, 1500);
+      }
+    };
+
+    timer = window.setTimeout(poll, 1500);
+
+    return () => {
+      stopped = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [run?.id, run?.status]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
