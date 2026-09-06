@@ -1865,11 +1865,9 @@ class CaseListCreateView(generics.ListCreateAPIView):
         user = self.request.user
         qs = Case.objects.filter(is_deleted=False)
 
-        recent_limit = timezone.now() - timezone.timedelta(hours=24)
-
         latest_comment_created_at = Comment.objects.filter(
             case_id=OuterRef("pk")
-        ).order_by("-created_at").values("created_at")[:1]
+        ).exclude(author=user).order_by("-created_at").values("created_at")[:1]
 
         latest_inbound_exchange_created_at = CaseExchange.objects.filter(
             case_id=OuterRef("pk"),
@@ -1948,8 +1946,7 @@ class CaseListCreateView(generics.ListCreateAPIView):
         qs = qs.annotate(
             has_recent_activity=DbCase(
                 When(
-                    Q(recent_activity_at__isnull=False)
-                    & Q(recent_activity_at__gte=recent_limit)
+                    Q(recent_activity_kind__isnull=False)
                     & (
                         Q(last_viewed_at__isnull=True)
                         | Q(recent_activity_at__gt=F("last_viewed_at"))
@@ -2171,6 +2168,12 @@ class CaseListCreateView(generics.ListCreateAPIView):
 class CaseRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     http_method_names = ["get", "patch", "put", "delete"]
+
+    def retrieve(self, request, *args, **kwargs):
+        read_at = timezone.now()
+        response = super().retrieve(request, *args, **kwargs)
+        response.data["activity_read_at"] = read_at.isoformat()
+        return response
 
     def initial(self, request, *args, **kwargs):
         if request.method == "DELETE":
@@ -2415,15 +2418,27 @@ class CaseMarkViewedView(APIView):
             )
             _check_case_access(request, event)
 
+        viewed_through = timezone.now()
+        if "viewed_through" in request.data:
+            raw_cursor = request.data["viewed_through"]
+            try:
+                cursor = parse_datetime(raw_cursor) if isinstance(raw_cursor, str) else None
+            except ValueError:
+                cursor = None
+            if cursor is None or timezone.is_naive(cursor) or cursor > viewed_through:
+                raise ValidationError({"viewed_through": "Expected a past timezone-aware timestamp."})
+            viewed_through = cursor
+
         state, _ = CaseUserState.objects.get_or_create(
             case=event,
             user=request.user,
-            defaults={"last_viewed_at": timezone.now()},
         )
 
         previous_last_viewed_at = state.last_viewed_at
-        state.last_viewed_at = timezone.now()
-        state.save(update_fields=["last_viewed_at"])
+        CaseUserState.objects.filter(pk=state.pk).filter(
+            Q(last_viewed_at__isnull=True) | Q(last_viewed_at__lt=viewed_through)
+        ).update(last_viewed_at=viewed_through)
+        state.refresh_from_db(fields=["last_viewed_at"])
 
         audit_event(
             request,
@@ -3540,7 +3555,7 @@ class CaseWorkbookApplyTemplateView(APIView):
 class WorkbookInstanceItemUpdateView(generics.UpdateAPIView):
     serializer_class = WorkbookInstanceItemSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
-    queryset = WorkbookInstanceItem.objects.select_related("instance__event")
+    queryset = WorkbookInstanceItem.objects.select_related("instance__case")
 
     def initial(self, request, *args, **kwargs):
         self.required_permission = "case.update"

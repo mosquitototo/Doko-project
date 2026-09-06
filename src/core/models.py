@@ -10,6 +10,7 @@ from django.dispatch import receiver
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.postgres.indexes import GinIndex
+from .sla import default_calendar
 
 
 
@@ -62,6 +63,7 @@ class Alert(models.Model):
         related_name="alerts_sla_acknowledged",
     )
     sla_acknowledgement_invalidated_at = models.DateTimeField(null=True, blank=True)
+    sla_snapshot = models.JSONField(null=True, blank=True, editable=False)
     members = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="alerts_shared")
     is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -649,6 +651,7 @@ class Customer(models.Model):
     name = models.CharField(max_length=200, unique=True)
     sla = models.CharField(max_length=200, blank=True)
     sla_rules = models.JSONField(default=dict, blank=True)
+    sla_calendar = models.JSONField(default=default_calendar, blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -1,0 +1,48 @@
+.markdown-editor [class*="_codeMirrorWrapper"],
+.markdown-rendered-content [class*="_codeMirrorWrapper"] {
+  padding: 0;
+}
+
+.markdown-editor [class*="_codeMirrorToolbar"],
+.markdown-rendered-content [class*="_codeMirrorToolbar"] {
+  position: static;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid hsl(var(--border));
+  border-radius: 0;
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.markdown-editor [class*="_codeMirrorToolbar"] + div,
+.markdown-rendered-content [class*="_codeMirrorToolbar"] + div {
+  padding: 0.5rem;
+}
+
+.markdown-editor [class*="_codeMirrorToolbar"] button,
+.markdown-rendered-content [class*="_codeMirrorToolbar"] button {
+  color: hsl(var(--accent-foreground));
+}
+
+.markdown-editor [class*="_codeMirrorWrapper"],
+.markdown-rendered-content [class*="_codeMirrorWrapper"] {
+  --code-keyword: #7c3a9e;
+  --code-string: #35651e;
+  --code-number: #8e4b0f;
+  --code-comment: #59616f;
+  --code-variable: #735614;
+  --code-function: #175887;
+  --code-operator: #17636d;
+}
+
+.dark .markdown-editor [class*="_codeMirrorWrapper"],
+.dark .markdown-rendered-content [class*="_codeMirrorWrapper"] {
+  --code-keyword: #d9a0eb;
+  --code-string: #b7d99d;
+  --code-number: #e7b785;
+  --code-comment: #b6bdc9;
+  --code-variable: #e8cd8d;
+  --code-function: #94cdf5;
+  --code-operator: #8bcbd4;
+}

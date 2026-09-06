@@ -626,14 +626,14 @@ function SlaTable({ rows }: { rows: any[] }) {
             <tbody>
               {rows.map((row) => (
                 <tr
-                  key={`${row.customer_id}-${row.customer_name}`}
+                  key={`${row.customer_id}-${row.severity}-${row.sla_hours}-${row.working_time}`}
                   className="border-b border-border/70"
                 >
                   <td className="px-3 py-3 text-foreground">{row.customer_name}</td>
                   <td className="px-3 py-3 text-muted-foreground">
                     {row.severity || "—"}
                   </td>
-                  <td className="px-3 py-3 text-muted-foreground">
+                  <td className="px-3 py-3 text-muted-foreground" title={row.working_time ? "Working hours" : "Elapsed hours"}>
                     {row.sla_hours}h
                   </td>
                   <td className="px-3 py-3 text-foreground">{row.closed_count}</td>
@@ -646,7 +646,7 @@ function SlaTable({ rows }: { rows: any[] }) {
                   <td className="px-3 py-3 text-foreground">
                     {row.sla_rate ?? "—"}%
                   </td>
-                  <td className="px-3 py-3 text-muted-foreground">
+                  <td className="px-3 py-3 text-muted-foreground" title={row.working_time ? "Working hours" : "Elapsed hours"}>
                     {row.avg_resolution_hours ?? "—"}h
                   </td>
                 </tr>
@@ -682,6 +682,7 @@ function normalizeDashboard(raw: any) {
     kpis: {
       cases_open: Number(safe?.kpis?.cases_open ?? 0),
       alerts_open: Number(safe?.kpis?.alerts_open ?? 0),
+      alerts_out_of_hours: safe?.kpis?.alerts_out_of_hours ?? { count: 0, evaluated: 0, unconfigured: 0 },
       hunts_open: Number(safe?.kpis?.hunts_open ?? 0),
       cases_closed_period: Number(safe?.kpis?.cases_closed_period ?? 0),
       alerts_closed_period: Number(safe?.kpis?.alerts_closed_period ?? 0),
@@ -1127,6 +1128,15 @@ export default function Dashboard() {
           />
         );
 
+      case "alerts_out_of_hours":
+        return (
+          <KpiCard
+            title="Alerts outside working hours"
+            value={k.alerts_out_of_hours.evaluated ? k.alerts_out_of_hours.count : (k.alerts_out_of_hours.unconfigured ? "—" : 0)}
+            subtitle={`${periodLabel} · ${k.alerts_out_of_hours.evaluated} evaluated${k.alerts_out_of_hours.unconfigured ? ` · ${k.alerts_out_of_hours.unconfigured} without a working calendar` : ""}`}
+          />
+        );
+
       case "sla_global":
         return (
           <KpiCard
@@ -1358,6 +1368,7 @@ export default function Dashboard() {
       "alert_fp_rate",
       "case_fp_rate",
       "sla_global",
+      "alerts_out_of_hours",
     ].includes(id)
   );
 

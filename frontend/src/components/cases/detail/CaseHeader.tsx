@@ -55,6 +55,7 @@ function InlineEditableBadge(props: {
   options: { value: string; label: string }[];
   display: ReactNode;
   ariaLabel: string;
+  menuAlign?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -96,7 +97,7 @@ function InlineEditableBadge(props: {
       </button>
 
       {open && !props.disabled ? (
-        <div className="absolute left-0 top-full z-50 mt-2 min-w-[220px] overflow-hidden rounded-2xl border border-border bg-card shadow-panel">
+        <div className={`absolute ${props.menuAlign === "right" ? "right-0" : "left-0"} top-full z-50 mt-2 min-w-[220px] overflow-hidden rounded-2xl border border-border bg-card shadow-panel`}>
           <div className="max-h-72 overflow-auto p-1.5">
             {props.options.map((option) => {
               const selected = option.value === props.value;
@@ -225,8 +226,9 @@ export default function CaseHeader(props: Props) {
         <span className="font-mono">Case {props.caseItem.id}</span>
       </div>
 
-      <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
-        <div className="min-w-0">
+      <div className="flex flex-col gap-6 xl:grid xl:grid-cols-[minmax(0,1fr)_auto] xl:gap-x-6 xl:gap-y-0">
+        <div className="min-w-0 xl:contents">
+          <div className="min-w-0 xl:col-start-1 xl:row-start-1">
           <div className="mb-1 flex h-8 items-center">
             <LeftButton
               onClick={() => navigate("/cases")}
@@ -297,7 +299,8 @@ export default function CaseHeader(props: Props) {
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-4 text-sm xl:col-start-1 xl:row-start-2">
             <div className="flex items-center gap-2">
               <Workflow className="size-4 text-muted-foreground" />
               <InlineEditableBadge
@@ -334,45 +337,12 @@ export default function CaseHeader(props: Props) {
               />
             </div>
 
-            <div className="flex items-center gap-2">
-              <Info className="size-4 text-muted-foreground" />
-              <InlineEditableBadge
-                value={String((props.caseItem as any).outcome || "unknown")}
-                onChange={props.changeOutcome}
-                disabled={props.busy || !props.canUpdateCase}
-                options={outcomeOptions}
-                ariaLabel="Change outcome"
-                display={<OutcomeBadge value={String((props.caseItem as any).outcome || "unknown")} />}
-              />
-            </div>
 
-            <div className="flex items-center gap-2">
-              <UserRound className="size-4 text-muted-foreground" />
-              <InlineEditableBadge
-                value={String((props.caseItem as any).owner_id_read ?? (props.caseItem as any).owner_id ?? "")}
-                disabled={!props.canUpdateCase || props.busyCaseId === (props.caseItem as any).id}
-                ariaLabel="Change owner"
-                options={props.users.map((u) => ({ value: String(u.id), label: u.username }))}
-                onChange={async (next) => {
-                  if (!next) return;
-                  props.setBusyCaseId((props.caseItem as any).id);
-                  try {
-                    await updateTicket(props.ticketId, { owner_id: Number(next) } as any);
-                    props.push({ kind: "success", title: "Owner updated" });
-                    await props.refreshAll();
-                  } catch (err: any) {
-                    props.push({ kind: "error", title: "Error", message: String(err?.response?.status ?? "network") });
-                  } finally {
-                    props.setBusyCaseId(null);
-                  }
-                }}
-                display={<InlineTextBadge>{(props.caseItem as any).owner_username || "Unassigned"}</InlineTextBadge>}
-              />
-            </div>
           </div>
         </div>
 
-        <div className="flex flex-col items-end gap-3">
+        <div className="flex flex-col items-end gap-3 xl:contents">
+          <div className="flex flex-col items-end gap-3 xl:col-start-2 xl:row-start-1">
           <div className="flex items-center gap-2">
             <OpenCloseToggleButton
               isOpen={(props.caseItem as any).status !== "closed"}
@@ -430,6 +400,46 @@ export default function CaseHeader(props: Props) {
             </button>
           </div>
           <CaseSourcesInline sources={caseSources} />
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-4 text-sm xl:col-start-2 xl:row-start-2 xl:mt-4">
+            <div className="flex items-center gap-2">
+              <Info className="size-4 text-muted-foreground" />
+              <InlineEditableBadge
+                value={String((props.caseItem as any).outcome || "unknown")}
+                onChange={props.changeOutcome}
+                disabled={props.busy || !props.canUpdateCase}
+                options={outcomeOptions}
+                ariaLabel="Change outcome"
+                menuAlign="right"
+                display={<OutcomeBadge value={String((props.caseItem as any).outcome || "unknown")} />}
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <UserRound className="size-4 text-muted-foreground" />
+              <InlineEditableBadge
+                value={String((props.caseItem as any).owner_id_read ?? (props.caseItem as any).owner_id ?? "")}
+                disabled={!props.canUpdateCase || props.busyCaseId === (props.caseItem as any).id}
+                ariaLabel="Change owner"
+                menuAlign="right"
+                options={props.users.map((u) => ({ value: String(u.id), label: u.username }))}
+                onChange={async (next) => {
+                  if (!next) return;
+                  props.setBusyCaseId((props.caseItem as any).id);
+                  try {
+                    await updateTicket(props.ticketId, { owner_id: Number(next) } as any);
+                    props.push({ kind: "success", title: "Owner updated" });
+                    await props.refreshAll();
+                  } catch (err: any) {
+                    props.push({ kind: "error", title: "Error", message: String(err?.response?.status ?? "network") });
+                  } finally {
+                    props.setBusyCaseId(null);
+                  }
+                }}
+                display={<InlineTextBadge>{(props.caseItem as any).owner_username || "Unassigned"}</InlineTextBadge>}
+              />
+            </div>
+          </div>
         </div>
       </div>
     </>

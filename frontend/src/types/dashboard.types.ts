@@ -68,6 +68,7 @@ export type DashboardData = {
   kpis: {
     cases_open: number;
     alerts_open: number;
+    alerts_out_of_hours: { count: number; evaluated: number; unconfigured: number };
     hunts_open: number;
     cases_closed_period: number;
     alerts_closed_period: number;

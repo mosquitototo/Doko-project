@@ -2,7 +2,6 @@ from django.utils import timezone
 
 from .models import Alert, AlertComment, ChatGeneratedDraft, Comment, Case, Hunt, HuntJournalEntry
 from .rbac import user_has_perm, get_accessible_customer_ids
-from .html_sanitizer import sanitize_html
 
 
 def _accessible_customer_filter(user):
@@ -99,12 +98,11 @@ def post_generated_draft(*, user, draft: ChatGeneratedDraft):
         ):
             raise PermissionError("You do not have permission to post case comments")
         
-        sanitized_content = sanitize_html(draft.content)
         Comment.objects.create(
             case=case,
             author=None,
             author_label="Catbot",
-            text=sanitized_content,
+            text=draft.content,
         )
 
     elif draft.target_type == "alert_comment":
@@ -116,12 +114,11 @@ def post_generated_draft(*, user, draft: ChatGeneratedDraft):
         ):
             raise PermissionError("You do not have permission to post alert comments")
 
-        sanitized_content = sanitize_html(draft.content)
         AlertComment.objects.create(
             alert=alert,
             author=None,
             author_label="Catbot",
-            text=sanitized_content,
+            text=draft.content,
         )
 
     elif draft.target_type == "hunt_note":
@@ -133,12 +130,11 @@ def post_generated_draft(*, user, draft: ChatGeneratedDraft):
         ):
             raise PermissionError("You do not have permission to post hunt notes")
 
-        sanitized_content = sanitize_html(draft.content)
         HuntJournalEntry.objects.create(
             hunt=hunt,
             author=user,
             entry_type=HuntJournalEntry.EntryType.NOTE,
-            text=sanitized_content,
+            text=draft.content,
         )
 
     else:

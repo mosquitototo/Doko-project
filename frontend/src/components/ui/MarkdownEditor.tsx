@@ -20,11 +20,19 @@ import {
   markdownShortcutPlugin,
   quotePlugin,
   tablePlugin,
+  thematicBreakPlugin,
   toolbarPlugin,
   type MDXEditorMethods,
 } from "@mdxeditor/editor";
 import "@mdxeditor/editor/style.css";
-import { markdownForMdxEditor } from "./markdownForEditor";
+import "./markdownCodeBlocks.css";
+import { markdownCodeBlockExtensions } from "./markdownCodeBlocks";
+import { strictMarkdownPlugin } from "./strictMarkdownPlugin";
+import {
+  markdownForMdxEditor,
+  shouldOpenMarkdownEditorLink,
+  shouldDeferMarkdownSync,
+} from "./markdownForEditor";
 
 type Props = {
   value: string;
@@ -66,11 +74,13 @@ export default function MarkdownEditor(props: Props) {
       quotePlugin(),
       linkPlugin(),
       tablePlugin(),
+      thematicBreakPlugin(),
       markdownShortcutPlugin(),
       codeBlockPlugin({
         defaultCodeBlockLanguage: "plaintext",
       }),
       codeMirrorPlugin({
+        codeMirrorExtensions: markdownCodeBlockExtensions,
         codeBlockLanguages: {
           plaintext: "Plain text",
           bash: "Bash",
@@ -93,8 +103,8 @@ export default function MarkdownEditor(props: Props) {
             <Separator />
             <BlockTypeSelect />
             <Separator />
-            <BoldItalicUnderlineToggles />
-            <StrikeThroughSupSubToggles />
+            <BoldItalicUnderlineToggles options={["Bold", "Italic"]} />
+            <StrikeThroughSupSubToggles options={["Strikethrough"]} />
             <CodeToggle />
             <Separator />
             <ListsToggle />
@@ -105,6 +115,7 @@ export default function MarkdownEditor(props: Props) {
           </>
         ),
       }),
+      strictMarkdownPlugin(),
     ],
     [],
   );
@@ -115,9 +126,11 @@ export default function MarkdownEditor(props: Props) {
     const activeElement = document.activeElement;
     const editor = editorRef.current;
 
-    if (focusedRef.current) return;
-
-    if (root && activeElement && root.contains(activeElement)) return;
+    if (shouldDeferMarkdownSync(
+      nextValue,
+      lastValueRef.current,
+      focusedRef.current || !!(root && activeElement && root.contains(activeElement)),
+    )) return;
 
     if (!editor) return;
 
@@ -173,6 +186,13 @@ export default function MarkdownEditor(props: Props) {
         ) {
           skipNextBlurRef.current = true;
         }
+      }}
+      onClickCapture={(event) => {
+        const target = event.target as Element | null;
+        const link = target?.closest("a[href]");
+        if (!link) return;
+        if (shouldOpenMarkdownEditorLink(event, link.matches('[data-testid="link-dialog-preview"]'))) return;
+        event.preventDefault();
       }}
       onFocusCapture={() => {
         focusedRef.current = true;
@@ -573,38 +593,38 @@ export default function MarkdownEditor(props: Props) {
 
         .markdown-editor .cm-line .tok-keyword,
         .markdown-rendered-content .cm-line .tok-keyword {
-          color: #c678dd;
+          color: var(--code-keyword);
         }
 
         .markdown-editor .cm-line .tok-string,
         .markdown-rendered-content .cm-line .tok-string {
-          color: #98c379;
+          color: var(--code-string);
         }
 
         .markdown-editor .cm-line .tok-number,
         .markdown-rendered-content .cm-line .tok-number {
-          color: #d19a66;
+          color: var(--code-number);
         }
 
         .markdown-editor .cm-line .tok-comment,
         .markdown-rendered-content .cm-line .tok-comment {
-          color: #7f848e;
+          color: var(--code-comment);
           font-style: italic;
         }
 
         .markdown-editor .cm-line .tok-variableName,
         .markdown-rendered-content .cm-line .tok-variableName {
-          color: #e5c07b;
+          color: var(--code-variable);
         }
 
         .markdown-editor .cm-line .tok-function,
         .markdown-rendered-content .cm-line .tok-function {
-          color: #61afef;
+          color: var(--code-function);
         }
 
         .markdown-editor .cm-line .tok-operator,
         .markdown-rendered-content .cm-line .tok-operator {
-          color: #56b6c2;
+          color: var(--code-operator);
         }
 
         .markdown-editor .cm-line .tok-punctuation,
@@ -694,6 +714,166 @@ export default function MarkdownEditor(props: Props) {
           background-color: hsl(var(--accent)) !important;
         }
 
+        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] {
+          background: hsl(var(--popover)) !important;
+          color: hsl(var(--popover-foreground)) !important;
+          border-color: hsl(var(--border)) !important;
+        }
+
+        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"]:has([data-testid="link-dialog-preview"]) {
+          gap: 0.125rem !important;
+          padding: 0.125rem 0.25rem !important;
+        }
+
+        [data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"] {
+          color: hsl(var(--popover-foreground)) !important;
+          line-height: 1.125rem;
+          margin-right: 0.125rem !important;
+        }
+
+        [data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"]:hover {
+          color: hsl(var(--primary)) !important;
+        }
+
+        [data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"] svg {
+          width: 0.875rem;
+          height: 0.875rem;
+          color: currentColor !important;
+          stroke: currentColor !important;
+        }
+
+        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] {
+          padding: 0.125rem !important;
+          color: hsl(var(--popover-foreground)) !important;
+          line-height: 0;
+          border-radius: 0.375rem;
+        }
+
+        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] svg {
+          width: 1rem;
+          height: 1rem;
+          color: currentColor !important;
+          stroke: currentColor !important;
+        }
+
+        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] svg * {
+          stroke: currentColor !important;
+        }
+
+        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"]:hover {
+          background: hsl(var(--accent)) !important;
+          color: hsl(var(--accent-foreground)) !important;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] label {
+          color: hsl(var(--popover-foreground)) !important;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] [class*="_linkDialogInputWrapper"],
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] input {
+          background: hsl(var(--background)) !important;
+          color: hsl(var(--foreground)) !important;
+          border-color: hsl(var(--border)) !important;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] input::placeholder {
+          color: hsl(var(--muted-foreground)) !important;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"],
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"] {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 2.5rem;
+          height: 2.5rem;
+          min-height: 0;
+          padding: 0 !important;
+          border-radius: 0.75rem;
+          font-size: 0 !important;
+          cursor: pointer;
+          box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+          transition: transform 200ms, background-color 200ms, border-color 200ms, box-shadow 200ms;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"] {
+          border: 0;
+          background: rgb(21 128 61);
+          color: white;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"]:hover {
+          background: rgb(22 101 52);
+          transform: translateY(-0.125rem);
+          box-shadow: 0 4px 6px rgb(0 0 0 / 0.12);
+        }
+
+        .dark [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"] {
+          background: rgb(22 101 52);
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"] {
+          border: 1px solid rgb(253 230 138 / 0.5);
+          background: rgb(255 251 235 / 0.5);
+          color: rgb(180 83 9);
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"]:hover {
+          border-color: rgb(252 211 77);
+          background: rgb(254 243 199 / 0.8);
+          transform: translateY(-0.125rem);
+          box-shadow: 0 4px 6px rgb(0 0 0 / 0.08);
+        }
+
+        .dark [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"] {
+          border-color: rgb(245 158 11 / 0.1);
+          background: rgb(245 158 11 / 0.05);
+          color: rgb(251 191 36);
+        }
+
+        .dark [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"]:hover {
+          border-color: rgb(245 158 11 / 0.2);
+          background: rgb(245 158 11 / 0.1);
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"]:focus-visible,
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"]:focus-visible {
+          outline: 2px solid hsl(var(--ring));
+          outline-offset: 2px;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"]:disabled,
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"]:disabled {
+          cursor: not-allowed;
+          opacity: 0.5;
+          transform: none;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"]::before,
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"]::before {
+          content: "";
+          display: block;
+          width: 1rem;
+          height: 1rem;
+          background: currentColor;
+          -webkit-mask-repeat: no-repeat;
+          mask-repeat: no-repeat;
+          -webkit-mask-position: center;
+          mask-position: center;
+          -webkit-mask-size: contain;
+          mask-size: contain;
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="submit"]::before {
+          -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M19%2021H5a2%202%200%200%201-2-2V5a2%202%200%200%201%202-2h11l5%205v11a2%202%200%200%201-2%202Z'/%3E%3Cpath%20d='M17%2021v-8H7v8'/%3E%3Cpath%20d='M7%203v5h8'/%3E%3C/svg%3E");
+          mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Cpath%20d='M19%2021H5a2%202%200%200%201-2-2V5a2%202%200%200%201%202-2h11l5%205v11a2%202%200%200%201-2%202Z'/%3E%3Cpath%20d='M17%2021v-8H7v8'/%3E%3Cpath%20d='M7%203v5h8'/%3E%3C/svg%3E");
+        }
+
+        [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] button[type="reset"]::before {
+          -webkit-mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Ccircle%20cx='12'%20cy='12'%20r='10'/%3E%3Cpath%20d='m15%209-6%206'/%3E%3Cpath%20d='m9%209%206%206'/%3E%3C/svg%3E");
+          mask-image: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%20fill='none'%20stroke='black'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'%3E%3Ccircle%20cx='12'%20cy='12'%20r='10'/%3E%3Cpath%20d='m15%209-6%206'/%3E%3Cpath%20d='m9%209%206%206'/%3E%3C/svg%3E");
+        }
+
         [data-radix-popper-content-wrapper] > div {
           background: hsl(var(--popover)) !important;
           color: hsl(var(--popover-foreground)) !important;
@@ -743,6 +923,7 @@ export default function MarkdownEditor(props: Props) {
         <MDXEditor
           ref={attachEditor}
           markdown={markdownForMdxEditor(props.value || "")}
+          suppressHtmlProcessing
           readOnly={!!props.disabled}
           placeholder={props.placeholder}
           onChange={(value) => {

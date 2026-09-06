@@ -12,6 +12,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from .models import Alert, Customer, DashboardPreference, Case, Hunt
 from .rbac import get_accessible_customer_ids, user_has_perm
+from .sla import WorkingCalendar, alert_snapshot, snapshot_deadline
 
 
 DEFAULT_WIDGETS = [
@@ -24,6 +25,7 @@ DEFAULT_WIDGETS = [
     "alert_fp_rate",
     "case_fp_rate",
     "sla_global",
+    "alerts_out_of_hours",
     "cases_created_closed_series",
     "alerts_created_series",
     "cases_by_severity_period",
@@ -51,6 +53,7 @@ AVAILABLE_WIDGETS = [
     {"id": "alert_fp_rate", "label": "Alert false positive rate", "kind": "kpi"},
     {"id": "case_fp_rate", "label": "Case false positive rate", "kind": "kpi"},
     {"id": "sla_global", "label": "Alert SLA global", "kind": "kpi"},
+    {"id": "alerts_out_of_hours", "label": "Alerts outside working hours", "kind": "kpi"},
     {"id": "sla_by_customer", "label": "Alert SLA by customer", "kind": "table"},
     {"id": "cases_created_closed_series", "label": "Cases created vs closed", "kind": "chart"},
     {"id": "alerts_created_series", "label": "Alerts created", "kind": "chart"},
@@ -288,18 +291,16 @@ def _compute_sla_rows(closed_alerts):
         if not customer or not created_at or not completed_at:
             continue
 
-        delta = customer.get_sla_delta(alert.severity) if hasattr(customer, "get_sla_delta") else None
-        rule = customer.get_sla_rule(alert.severity) if hasattr(customer, "get_sla_rule") else None
+        snapshot = alert_snapshot(alert)
+        due_at = snapshot_deadline(snapshot)
+        rule = snapshot.get("rule")
 
-        if not delta or not rule:
+        if not due_at or not rule:
             continue
 
-        sla_hours = round(delta.total_seconds() / 3600.0, 2)
-        elapsed_hours = max(
-            0.0,
-            (completed_at - created_at).total_seconds() / 3600.0,
-        )
-        within = elapsed_hours <= sla_hours
+        sla_hours = round(snapshot["budget_seconds"] / 3600.0, 2)
+        elapsed_hours = WorkingCalendar(snapshot["calendar"]).elapsed(created_at, completed_at) / 3600.0
+        within = completed_at <= due_at
 
         rows.append(
             {
@@ -308,6 +309,7 @@ def _compute_sla_rows(closed_alerts):
                 "severity": alert.severity or "",
                 "sla_hours": sla_hours,
                 "sla_rule": rule,
+                "working_time": bool(snapshot["calendar"].get("enabled")),
                 "resolution_hours": elapsed_hours,
                 "within_sla": within,
             }
@@ -316,7 +318,7 @@ def _compute_sla_rows(closed_alerts):
     by_customer = {}
 
     for row in rows:
-        bucket_key = f"{row['customer_id'] or 'none'}:{row['severity'] or 'none'}"
+        bucket_key = (row["customer_id"], row["severity"], row["sla_hours"], row["working_time"])
         bucket = by_customer.setdefault(
             bucket_key,
             {
@@ -325,6 +327,7 @@ def _compute_sla_rows(closed_alerts):
                 "severity": row["severity"],
                 "sla_hours": row["sla_hours"],
                 "sla_rule": row["sla_rule"],
+                "working_time": row["working_time"],
                 "closed_count": 0,
                 "within_sla_count": 0,
                 "breached_count": 0,
@@ -362,6 +365,8 @@ def _compute_sla_rows(closed_alerts):
         key=lambda x: (
             x["customer_name"].lower(),
             x["severity"] or "",
+            x["sla_hours"],
+            x["working_time"],
             x["customer_id"] or "",
         )
     )
@@ -390,6 +395,22 @@ def _compute_sla_rows(closed_alerts):
         },
         "by_customer": by_customer_rows,
     }
+
+
+def _out_of_hours_count(alerts):
+    calendars = {
+        customer_id: WorkingCalendar(config)
+        for customer_id, config in Customer.objects.filter(pk__in=alerts.values("customer_id")).values_list("pk", "sla_calendar")
+    }
+    outside = evaluated = unconfigured = 0
+    for customer_id, created_at in alerts.values_list("customer_id", "created_at").iterator(chunk_size=2000):
+        calendar = calendars.get(customer_id)
+        if not calendar or not calendar.enabled:
+            unconfigured += 1
+            continue
+        evaluated += 1
+        outside += not calendar.contains(created_at)
+    return {"count": outside, "evaluated": evaluated, "unconfigured": unconfigured}
 
 
 def _series_from_maps(start_day: date, end_day: date, left_map: dict, right_map: dict | None = None):
@@ -650,6 +671,7 @@ def dashboard(request):
             "kpis": {
                 "cases_open": cases_open,
                 "alerts_open": alerts_open,
+                "alerts_out_of_hours": _out_of_hours_count(alerts_created_period),
                 "hunts_open": hunts_open,
                 "cases_closed_period": cases_closed_period,
                 "alerts_closed_period": alerts_closed_period_count,

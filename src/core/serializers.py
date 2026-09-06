@@ -3,6 +3,7 @@ from django.utils import timezone
 
 from .html_sanitizer import sanitize_html
 from .rbac import get_accessible_customer_ids, user_has_perm
+from .sla import alert_snapshot, snapshot_deadline, validate_calendar
 
 import json
 import uuid
@@ -67,7 +68,6 @@ def _authorized_default_customer(context, permission_code: str):
 
 def compute_sla_info(obj, completed_statuses: set[str]):
     customer = getattr(obj, "customer", None)
-    severity = getattr(obj, "severity", "") or ""
     created_at = getattr(obj, "created_at", None)
 
     if not customer or not created_at:
@@ -77,17 +77,17 @@ def compute_sla_info(obj, completed_statuses: set[str]):
             "sla_rule": None,
         }
 
-    delta = customer.get_sla_delta(severity) if hasattr(customer, "get_sla_delta") else None
-    rule = customer.get_sla_rule(severity) if hasattr(customer, "get_sla_rule") else None
+    snapshot = alert_snapshot(obj)
+    due_at = snapshot_deadline(snapshot)
+    rule = snapshot.get("rule")
 
-    if not delta or not rule:
+    if not due_at or not rule:
         return {
             "sla_due_at": None,
             "sla_state": "none",
             "sla_rule": None,
         }
 
-    due_at = created_at + delta
     status = getattr(obj, "status", "") or ""
     acknowledged_at = getattr(obj, "sla_acknowledged_at", None)
 
@@ -203,6 +203,7 @@ class TimelineItemSerializer(serializers.ModelSerializer):
 
 
 class AlertSerializer(serializers.ModelSerializer):
+    description = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     case = serializers.UUIDField(source="case.id", read_only=True, allow_null=True)
     customer_id = serializers.UUIDField(source="customer.id", read_only=True)
     customer_name = serializers.CharField(source="customer.name", read_only=True)
@@ -366,6 +367,7 @@ class AlertCommentSerializer(serializers.ModelSerializer):
         model = AlertComment
         fields = ["id", "alert", "text", "created_at", "updated_at", "author_label", "author_display"]
         read_only_fields = ["id", "alert", "created_at", "updated_at"]
+        extra_kwargs = {"text": {"trim_whitespace": False}}
 
     def get_author_display(self, obj):
         if obj.author:
@@ -374,10 +376,6 @@ class AlertCommentSerializer(serializers.ModelSerializer):
             return obj.author_label
         return ""
     
-    def validate_text(self, value):
-        return sanitize_html(value)
-
-
 class CaseListSerializer(serializers.ModelSerializer):
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False
@@ -448,6 +446,7 @@ class CaseListSerializer(serializers.ModelSerializer):
 
 
 class CaseSerializer(serializers.ModelSerializer):
+    description = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False
     )
@@ -686,12 +685,11 @@ class HuntJournalEntrySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "hunt", "author", "author_username", "created_at", "updated_at"]
-
-    def validate_text(self, value):
-        return sanitize_html(value)
+        extra_kwargs = {"text": {"trim_whitespace": False}}
 
 
 class HuntListSerializer(serializers.ModelSerializer):
+    context = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False, allow_null=True
     )
@@ -759,6 +757,8 @@ class HuntListSerializer(serializers.ModelSerializer):
 
 
 class HuntDetailSerializer(serializers.ModelSerializer):
+    context = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
+    conclusion = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False, allow_null=True
     )
@@ -842,6 +842,7 @@ class CommentSerializer(serializers.ModelSerializer):
         model = Comment
         fields = ["id", "case", "author", "text", "created_at", "updated_at", "customer_id", "customer_name", "author_display"]
         read_only_fields = ["id", "case", "author", "created_at", "updated_at"]
+        extra_kwargs = {"text": {"trim_whitespace": False}}
 
     def get_author_display(self, obj):
         if obj.author:
@@ -850,8 +851,6 @@ class CommentSerializer(serializers.ModelSerializer):
             return obj.author_label
         return ""
         
-    def validate_text(self, value):
-        return sanitize_html(value)
     
 
 
@@ -915,11 +914,18 @@ class CustomerSerializer(serializers.ModelSerializer):
             "name",
             "sla",
             "sla_rules",
+            "sla_calendar",
             "is_active",
             "created_at",
             "contacts",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_sla_calendar(self, value):
+        try:
+            return validate_calendar(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
     def validate_sla_rules(self, value):
         if value in (None, ""):
@@ -1380,6 +1386,7 @@ class TaskCommentSerializer(serializers.ModelSerializer):
         model = TaskComment
         fields = ["id", "task", "text", "created_at", "updated_at", "author_label", "author_display"]
         read_only_fields = ["id", "task", "created_at", "updated_at"]
+        extra_kwargs = {"text": {"trim_whitespace": False}}
 
     def get_author_display(self, obj):
         if obj.author:
@@ -1388,8 +1395,6 @@ class TaskCommentSerializer(serializers.ModelSerializer):
             return obj.author_label
         return ""
 
-    def validate_text(self, value):
-        return sanitize_html(value)
 
 
 class TaskListSerializer(serializers.ModelSerializer):
@@ -1440,6 +1445,7 @@ class TaskListSerializer(serializers.ModelSerializer):
 
 
 class TaskDetailSerializer(serializers.ModelSerializer):
+    description = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner",
         queryset=User.objects.all(),

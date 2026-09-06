@@ -996,9 +996,6 @@ export default function AlertDetail() {
               </div>
             </div>
 
-            <div className="mt-4 text-xs italic text-muted-foreground">
-              Alert source: {(item as any).source || "—"}
-            </div>
           </div>
         </div>
 
@@ -1051,7 +1048,11 @@ export default function AlertDetail() {
             />
           </div>
 
-          <div className="mt-2 flex flex-wrap items-center gap-3 xl:mt-[72px]">
+          <div className="mt-4 max-w-[360px] break-words text-right text-xs italic text-muted-foreground">
+            Alert source: {(item as any).source || "—"}
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-3 xl:mt-[28px]">
             <div className="flex items-center gap-2">
               <Info className="size-4 text-muted-foreground" />
               <InlineEditableBadge

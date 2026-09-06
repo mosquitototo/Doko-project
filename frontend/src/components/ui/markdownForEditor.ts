@@ -1,123 +1,73 @@
-function escapeHtmlTags(value: string) {
-  return String(value || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
+
+export const markdownSyntaxPolicy = {
+  disable: { null: ["htmlFlow", "htmlText", "highlight"] },
+};
+
+export const allowedMarkdownNodes = new Set([
+  "root", "paragraph", "text", "break", "emphasis", "strong", "delete",
+  "link", "heading", "list", "listItem", "blockquote", "table", "tableRow",
+  "tableCell", "code", "inlineCode", "thematicBreak",
+]);
+
+export function shouldOpenMarkdownEditorLink(event: {
+  ctrlKey: boolean;
+  metaKey: boolean;
+}, isLinkPreview = false) {
+  return isLinkPreview || event.ctrlKey || event.metaKey;
 }
 
-function stripSupportedHtmlTags(value: string) {
-  return String(value || "").replace(/<\/?(h[1-6]|p|blockquote|strong|b|em|i|u|s|strike|del|sup|sub|ul|ol|li|br|hr)\b[^>]*>/gi, "");
-}
-
-function normalizeSupportedHtmlToMarkdown(value: string) {
-  return String(value || "")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<hr\s*\/?>/gi, "\n\n---\n\n")
-    .replace(/<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi, (_match, level, content) => {
-      const depth = Math.min(6, Math.max(1, Number(level) || 3));
-      const text = stripSupportedHtmlTags(content).trim();
-      return text ? `\n${"#".repeat(depth)} ${text}\n` : "";
-    })
-    .replace(/<p\b[^>]*>\s*<\/p>/gi, "\n")
-    .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/gi, (_match, content) => {
-      const text = String(content || "").trim();
-      return text ? `\n${text}\n` : "";
-    })
-    .replace(/<blockquote\b[^>]*>([\s\S]*?)<\/blockquote>/gi, (_match, content) => {
-      const text = String(content || "").trim();
-      if (!text) return "";
-      return `\n${text
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\n")}\n`;
-    })
-    .replace(/<(strong|b)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_match, _tag, content) => {
-      const text = String(content || "").trim();
-      return text ? `**${text}**` : "";
-    })
-    .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_match, _tag, content) => {
-      const text = String(content || "").trim();
-      return text ? `*${text}*` : "";
-    })
-    .replace(/<(s|strike|del)\b[^>]*>([\s\S]*?)<\/\1>/gi, (_match, _tag, content) => {
-      const text = String(content || "").trim();
-      return text ? `~~${text}~~` : "";
-    })
-    .replace(/<u\b[^>]*>([\s\S]*?)<\/u>/gi, (_match, content) => {
-      const text = String(content || "").trim();
-      return text ? `<u>${escapeHtmlTags(text)}</u>` : "";
-    })
-    .replace(/<sup\b[^>]*>([\s\S]*?)<\/sup>/gi, (_match, content) => {
-      const text = String(content || "").trim();
-      return text ? `<sup>${escapeHtmlTags(text)}</sup>` : "";
-    })
-    .replace(/<sub\b[^>]*>([\s\S]*?)<\/sub>/gi, (_match, content) => {
-      const text = String(content || "").trim();
-      return text ? `<sub>${escapeHtmlTags(text)}</sub>` : "";
-    })
-    .replace(/<ul\b[^>]*>([\s\S]*?)<\/ul>/gi, (_match, content) => {
-      return `\n${String(content || "")
-        .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_liMatch, liContent) => {
-          const text = stripSupportedHtmlTags(liContent).trim();
-          return text ? `- ${text}\n` : "";
-        })
-        .trim()}\n`;
-    })
-    .replace(/<ol\b[^>]*>([\s\S]*?)<\/ol>/gi, (_match, content) => {
-      let index = 0;
-      return `\n${String(content || "")
-        .replace(/<li\b[^>]*>([\s\S]*?)<\/li>/gi, (_liMatch, liContent) => {
-          const text = stripSupportedHtmlTags(liContent).trim();
-          if (!text) return "";
-          index += 1;
-          return `${index}. ${text}\n`;
-        })
-        .trim()}\n`;
-    });
-}
-
-function escapeUnsupportedHtmlInline(value: string) {
-  return String(value || "")
-    .split(/(`+[^`]*`+)/g)
-    .map((part) => {
-      if (part.startsWith("`") && part.endsWith("`")) {
-        return part;
-      }
-
-      const normalized = normalizeSupportedHtmlToMarkdown(part);
-
-      return normalized
-        .replace(/<!--[\s\S]*?-->/g, escapeHtmlTags)
-        .replace(/<![A-Za-z][^>]*>/g, escapeHtmlTags)
-        .replace(/<\/?(?!u\b|sup\b|sub\b)[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>/g, escapeHtmlTags)
-        .replace(/<(?![^<>\n]*>)/g, "\\<")
-        .replace(/(?<!\\)[{}]/g, (character) => `\\${character}`);
-    })
-    .join("");
+export function shouldDeferMarkdownSync(nextValue: string, lastValue: string, focused: boolean) {
+  return focused && !(nextValue === "" && lastValue !== "");
 }
 
 export function markdownForMdxEditor(value: string) {
-  const lines = String(value || "").split("\n");
-  let inFence = false;
-  let fenceMarker = "";
+  const source = String(value || "");
+  const tree = fromMarkdown(source, {
+    extensions: [gfm(), markdownSyntaxPolicy],
+    mdastExtensions: [gfmFromMarkdown()],
+  });
+  const replacements: { start: number; end: number; text: string }[] = [];
 
-  return lines
-    .map((line) => {
-      const trimmed = line.trimStart();
-
-      if (!inFence && (trimmed.startsWith("```") || trimmed.startsWith("~~~"))) {
-        inFence = true;
-        fenceMarker = trimmed.startsWith("```") ? "```" : "~~~";
-        return line;
+  function visit(node: {
+    type: string;
+    position?: { start: { offset?: number }; end: { offset?: number } };
+    children?: typeof tree.children;
+  }) {
+    if (!allowedMarkdownNodes.has(node.type)) {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start !== undefined && end !== undefined) {
+        replacements.push({
+          start,
+          end,
+          text: source.slice(start, end).replace(/[!-/:-@\[-`{-~]/g, "\\$&"),
+        });
       }
+      return;
+    }
+    node.children?.forEach(visit);
+  }
 
-      if (inFence) {
-        if (trimmed.startsWith(fenceMarker)) {
-          inFence = false;
-          fenceMarker = "";
-        }
-
-        return line;
+  visit(tree);
+  const first = tree.children[0];
+  if (first?.type === "code") {
+    const start = first.position?.start.offset;
+    const end = first.position?.end.offset;
+    if (start !== undefined && end !== undefined && !/^ {0,3}(?:`{3,}|~{3,})/.test(source.slice(start, end))) {
+      let fenceLength = 3;
+      for (const match of first.value.matchAll(/`+/g)) {
+        fenceLength = Math.max(fenceLength, match[0].length + 1);
       }
-
-      return escapeUnsupportedHtmlInline(line);
-    })
-    .join("\n");
+      const fence = "`".repeat(fenceLength);
+      replacements.unshift({ start, end, text: `${fence}\n${first.value}\n${fence}` });
+    }
+  }
+  let result = source;
+  for (const { start, end, text } of replacements.reverse()) {
+    result = result.slice(0, start) + text + result.slice(end);
+  }
+  return result;
 }

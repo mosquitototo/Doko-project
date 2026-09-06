@@ -8,6 +8,24 @@ from django.utils.timezone import localtime
 from django.db.models import Model, QuerySet
 from django.db.models.manager import BaseManager
 from urllib.parse import urlparse
+from .models import Alert, AlertComment, Case, Comment, Hunt, HuntJournalEntry, Task, TaskComment
+
+
+class MarkdownReportText(str):
+    def __html__(self):
+        return escape(str(self))
+
+
+MARKDOWN_REPORT_FIELDS = {
+    Alert: {"description"},
+    Case: {"description"},
+    Hunt: {"context", "conclusion"},
+    Task: {"description"},
+    AlertComment: {"text"},
+    Comment: {"text"},
+    HuntJournalEntry: {"text"},
+    TaskComment: {"text"},
+}
 
 
 def _format_date(value):
@@ -73,8 +91,12 @@ class TemplateObjectProxy:
             raise AttributeError(name)
 
         value = getattr(self._obj, name)
+        if isinstance(value, BaseManager):
+            return _normalize_value(value)
         if callable(value):
             raise AttributeError(name)
+        if name in MARKDOWN_REPORT_FIELDS.get(type(self._obj), set()) and isinstance(value, str):
+            return MarkdownReportText(value)
         return _normalize_value(value)
 
     def __str__(self):

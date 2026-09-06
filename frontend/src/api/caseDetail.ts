@@ -34,6 +34,7 @@ export type CaseDetailRow = {
 };
 
 export type CaseDetail = {
+  activity_read_at: string;
   id: string;
   case_number?: number | null;
   title: string;
@@ -257,11 +258,11 @@ export async function unarchiveCase(caseId: string): Promise<void> {
   );
 }
 
-export async function markCaseViewed(caseId: string) {
+export async function markCaseViewed(caseId: string, viewedThrough?: string) {
   const csrfToken = await ensureCsrf();
   const r = await api.post(
     `/api/cases/${caseId}/mark-viewed/`,
-    {},
+    viewedThrough ? { viewed_through: viewedThrough } : {},
     {
       headers: {
         "X-CSRFToken": csrfToken,

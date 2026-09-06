@@ -10,7 +10,6 @@ import {
   listComments,
   listLinkedAlerts,
   listLinkedTasks,
-  markCaseViewed,
   patchWorkbookItem,
   type Attachment,
   type Comment,
@@ -23,6 +22,7 @@ import {
 } from "../api/caseDetail";
 import { archiveCase, deleteCase, unarchiveCase, updateTicket } from "../api/cases";
 import { useToast } from "../components/ui/toast";
+import { useCaseReadReceipt } from "../hooks/useCaseReadReceipt";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
 import { useMe } from "../contexts/MeContext";
@@ -88,11 +88,9 @@ export default function TicketDetail() {
   const [followupSelectionOpen, setFollowupSelectionOpen] = useState(false);
   const [followupSelectionAction, setFollowupSelectionAction] = useState<"save" | "send">("save");
 
-  useEffect(() => {
-    if (!ticketId) return;
-
-    markCaseViewed(ticketId).catch(() => {});
-  }, [ticketId]);
+  const markActivityLoaded = useCaseReadReceipt(ticketId || "", () => {
+    push({ kind: "error", title: "Read status not saved", message: "The case loaded, but its read status could not be saved. Reload the case to retry." });
+  });
   
   const [autoFollowupOpen, setAutoFollowupOpen] = useState(false);
   useEffect(() => {
@@ -126,6 +124,11 @@ export default function TicketDetail() {
   const canViewTasks = can("task.view") || can("task.manage");
 
   const refreshSeq = useRef(0);
+  const activityRefreshSeq = useRef(0);
+  useEffect(() => () => {
+    activityRefreshSeq.current += 1;
+    refreshSeq.current += 1;
+  }, [ticketId]);
   const [tab, setTab] = useState<Tab>("summary");
   const location = useLocation();
 
@@ -236,6 +239,7 @@ export default function TicketDetail() {
   async function refreshAll() {
     if (!ticketId) return;
     const seq = ++refreshSeq.current;
+    const activitySeq = ++activityRefreshSeq.current;
     setError(null);
 
     const e = await fetchCaseDetail(ticketId);
@@ -244,19 +248,27 @@ export default function TicketDetail() {
     setEditTitle(e.title);
     if (!(tab === "summary" && descFocusedRef.current)) setEditDescription(e.description || "");
 
-    const [c, a, al, lt] = await Promise.all([
+    const [c, a, al, lt, loadedExchanges] = await Promise.all([
       listComments(ticketId),
       listAttachments(ticketId),
       listLinkedAlerts(ticketId),
       canViewTasks ? listLinkedTasks(ticketId).catch(() => []) : Promise.resolve([]),
+      listCaseExchanges(ticketId).catch(() => {
+        push({ kind: "error", title: "Activity not fully loaded", message: "Read status was not updated. Reload the case to retry." });
+        return null;
+      }),
     ]);
 
     if (seq !== refreshSeq.current) return;
-    setComments(c);
+    if (activitySeq === activityRefreshSeq.current) setComments(c);
     setAttachments(a);
     setLinkedAlerts(al);
     setLinkedTasks(lt);
+    if (loadedExchanges && activitySeq === activityRefreshSeq.current) setExchanges(loadedExchanges);
     await loadWorkbook();
+    if (loadedExchanges && seq === refreshSeq.current && activitySeq === activityRefreshSeq.current) {
+      markActivityLoaded(e.activity_read_at, c, loadedExchanges);
+    }
   }
 
   const [exchanges, setExchanges] = useState<CaseExchange[]>([]);
@@ -542,11 +554,24 @@ export default function TicketDetail() {
 
   async function refreshExchanges() {
     if (!ticketId) return;
+    const activitySeq = ++activityRefreshSeq.current;
     setExchangesBusy(true);
     try {
-      const r = await listCaseExchanges(ticketId);
+      const snapshot = await fetchCaseDetail(ticketId).catch(() => null);
+      const [r, loadedComments] = await Promise.all([
+        listCaseExchanges(ticketId),
+        listComments(ticketId).catch(() => null),
+      ]);
+      if (activitySeq !== activityRefreshSeq.current) return;
       setExchanges(Array.isArray(r) ? r : []);
+      if (loadedComments) setComments(loadedComments);
+      if (snapshot && loadedComments) {
+        markActivityLoaded(snapshot.activity_read_at, loadedComments, r);
+      } else {
+        push({ kind: "error", title: "Activity not fully loaded", message: "Read status was not updated. Reload the case to retry." });
+      }
     } catch (e: any) {
+      if (activitySeq !== activityRefreshSeq.current) return;
       setExchanges([]);
       push({ kind: "error", title: "Error", message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network") });
     } finally {

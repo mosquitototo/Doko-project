@@ -1,5 +1,6 @@
 import { api } from "./client";
 import { ensureCsrf } from "./auth";
+import type { CustomerSlaCalendar } from "../utils/customerSlaCalendar";
 
 export type CustomerContact = {
   id: string;
@@ -26,6 +27,7 @@ export type Customer = {
   name: string;
   sla: string;
   sla_rules?: CustomerSlaRules;
+  sla_calendar?: CustomerSlaCalendar;
   is_active: boolean;
   created_at: string;
   contacts?: CustomerContact[];
@@ -45,6 +47,7 @@ export async function createCustomer(payload: {
   name: string;
   sla?: string;
   sla_rules?: CustomerSlaRules;
+  sla_calendar?: CustomerSlaCalendar;
 }) {
   const csrfToken = await ensureCsrf();
   const res = await api.post("/api/settings/customers/", payload, {
@@ -61,6 +64,7 @@ export async function updateCustomer(
     name: string;
     sla: string;
     sla_rules: CustomerSlaRules;
+    sla_calendar: CustomerSlaCalendar;
     is_active: boolean;
   }>
 ) {

@@ -19,6 +19,8 @@ import {
   type CustomerSlaUnit,
 } from "../../api/settingsCustomers";
 import { listSeverities, type SeverityItem } from "../../api/dataModels";
+import CustomerSlaCalendarFields from "../../components/settings/CustomerSlaCalendarFields";
+import { calendarError, customerSlaCalendar } from "../../utils/customerSlaCalendar";
 import {
   EditGenButton,
   PowerOnButton,
@@ -245,6 +247,7 @@ export default function SettingsCustomers() {
   const [createName, setCreateName] = useState("");
   const [createSla, setCreateSla] = useState("");
   const [createSlaRules, setCreateSlaRules] = useState<CustomerSlaRules>({});
+  const [createCalendar, setCreateCalendar] = useState(customerSlaCalendar);
 
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
   const [disableTarget, setDisableTarget] = useState<{
@@ -393,6 +396,7 @@ export default function SettingsCustomers() {
               setCreateName("");
               setCreateSla("");
               setCreateSlaRules({});
+              setCreateCalendar(customerSlaCalendar());
             }}
             disabled={loading || !canManage}
             iconOnly={false}
@@ -574,7 +578,12 @@ export default function SettingsCustomers() {
           }
           setLoading(true);
           try {
-            await createCustomer({ name, sla: createSla, sla_rules: normalizeSlaRules(createSlaRules) });
+            const error = calendarError(createCalendar);
+            if (error) {
+              push({ kind: "error", title: "SLA calendar", message: error });
+              return;
+            }
+            await createCustomer({ name, sla: createSla, sla_rules: normalizeSlaRules(createSlaRules), sla_calendar: createCalendar });
             push({ kind: "success", title: "Created" });
             setCreateOpen(false);
             setCreateSlaRules({});
@@ -584,7 +593,7 @@ export default function SettingsCustomers() {
               kind: "error",
               title: "Error",
               message: String(
-                e?.response?.data?.detail ?? e?.response?.status ?? "network"
+                e?.response?.data?.sla_calendar ?? e?.response?.data?.detail ?? e?.response?.status ?? "network"
               ),
             });
           } finally {
@@ -696,6 +705,7 @@ export default function SettingsCustomers() {
                   })}
                 </div>
               </div>
+              <CustomerSlaCalendarFields value={createCalendar} onChange={setCreateCalendar} disabled={loading || !canManage} />
             </div>
           </div>
         }
@@ -760,10 +770,17 @@ export default function SettingsCustomers() {
 
           setLoading(true);
           try {
+            const calendar = customerSlaCalendar(editCustomer.sla_calendar);
+            const error = calendarError(calendar);
+            if (error) {
+              push({ kind: "error", title: "SLA calendar", message: error });
+              return;
+            }
             await updateCustomer(editCustomer.id, {
               name,
               sla: editCustomer.sla ?? "",
               sla_rules: normalizeSlaRules((editCustomer as any).sla_rules),
+              sla_calendar: calendar,
             });
 
             const existing = await listCustomerContacts(editCustomer.id, true);
@@ -806,7 +823,7 @@ export default function SettingsCustomers() {
               kind: "error",
               title: "Error",
               message: String(
-                e?.response?.data?.detail ?? e?.response?.status ?? "network"
+                e?.response?.data?.sla_calendar ?? e?.response?.data?.detail ?? e?.response?.status ?? "network"
               ),
             });
           } finally {
@@ -948,6 +965,7 @@ export default function SettingsCustomers() {
                       })}
                     </div>
                   </div>
+                  <CustomerSlaCalendarFields value={customerSlaCalendar(editCustomer.sla_calendar)} onChange={(sla_calendar) => setEditCustomer({ ...editCustomer, sla_calendar })} disabled={loading || !canManage} />
                 </div>
               </Card>
 
