@@ -314,6 +314,7 @@ export default function Alerts() {
   const [editClassification, setEditClassification] = useState<string>("");
   const [editOwnerId, setEditOwnerId] = useState<string>("");
   const [editStatus, setEditStatus] = useState<string>("");
+  const [editOutcome, setEditOutcome] = useState<string>("");
 
   function openEdit(ids: string[]) {
     setEditCustomer("");
@@ -321,6 +322,7 @@ export default function Alerts() {
     setEditClassification("");
     setEditOwnerId("");
     setEditStatus("");
+    setEditOutcome("");
     setEditUI({ ids });
   }
 
@@ -1851,6 +1853,23 @@ export default function Alerts() {
               </select>
             </div>
 
+            <div className="grid gap-1">
+              <FieldLabel>Outcome</FieldLabel>
+              <select
+                className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
+                value={editOutcome}
+                onChange={(e) => setEditOutcome(e.target.value)}
+                disabled={busyAction || !canUpdate}
+              >
+                <option value="">— no change</option>
+                {outcomeDropdownOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div className="sm:col-span-2 text-[11px] text-muted-foreground">
               “— no change” leaves the field as-is. “clear” removes the value.
             </div>
@@ -1874,6 +1893,7 @@ export default function Alerts() {
           if (editSeverity !== "") payload.severity = editSeverity;
           if (editClassification !== "") payload.classification = editClassification;
           if (editStatus !== "") payload.status = editStatus;
+          if (editOutcome !== "") payload.outcome = editOutcome;
 
           if (editOwnerId === "__NULL__") payload.owner = null;
           else if (editOwnerId !== "") payload.owner = editOwnerId;
