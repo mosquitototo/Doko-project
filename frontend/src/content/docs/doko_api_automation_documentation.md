@@ -361,6 +361,37 @@ customer_id
 ordering
 ```
 
+### Optional customer subgroups for alerts and cases
+
+Alerts and cases accept an optional `subgroups` array of subgroup UUIDs alongside the existing `customer` UUID. Find subgroup UUIDs by expanding a customer in **Settings → Customers**. The authenticated `GET /api/customers/scopes/` endpoint also lists accessible customer and subgroup names and UUIDs, without contact details.
+
+```python
+payload = {
+    "title": "Activity to review",
+    "customer": "CUSTOMER_UUID",
+    "subgroups": ["SUBGROUP_UUID_1", "SUBGROUP_UUID_2"],
+}
+response = requests.post(
+    f"{DOKO_URL}/api/alerts/",
+    headers={"Authorization": f"Token {DOKO_TOKEN}"},
+    json=payload,
+    timeout=30,
+)
+response.raise_for_status()
+```
+
+The same fields work with `POST /api/cases/` and with `PATCH /api/alerts/{id}/` or `PATCH /api/cases/{id}/`. Every subgroup must belong to the selected customer. Customer permissions apply unchanged.
+
+- Omit `subgroups` when creating an element to leave it unassigned to subgroups.
+- Omit `subgroups` when updating to preserve existing assignments, unless the customer changes.
+- Send `"subgroups": []` to remove subgroup assignments while keeping the customer.
+- Changing or removing the customer clears previous subgroup assignments. New assignments can be provided in the same request.
+- Linking or merging an alert does not automatically assign its subgroups to the case.
+
+For dashboard statistics, use `GET /api/dashboard/?customer=CUSTOMER_UUID&subgroups=SUBGROUP_UUID_1&subgroups=SUBGROUP_UUID_2`. Selected groups are combined with OR, without counting an element twice. Elements assigned only to the customer are excluded from subgroup statistics. Without a subgroup filter, existing customer statistics are unchanged. Subgroup statistics concern cases and alerts; hunts have no subgroup assignments.
+
+Customer management accepts a full `subgroups` array containing `name`, optional `description`, optional `contacts` (name, email, phone and title), and the existing `id` when editing a subgroup. A name is required for every submitted subgroup and contact. Omit the entire field to preserve subgroups. When submitting the array, omitted subgroups are removed together with their associations; alerts and cases are retained.
+
 ### Create an alert
 
 ```bash

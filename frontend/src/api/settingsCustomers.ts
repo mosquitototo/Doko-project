@@ -22,6 +22,34 @@ export type CustomerSlaRule = {
 
 export type CustomerSlaRules = Record<string, CustomerSlaRule>;
 
+export type CustomerSubgroupContact = {
+  name: string;
+  email: string;
+  phone: string;
+  title: string;
+};
+
+export type CustomerSubgroup = {
+  id: string;
+  name: string;
+  description: string;
+  contacts: CustomerSubgroupContact[];
+};
+
+export type CustomerSubgroupPayload = Omit<CustomerSubgroup, "id"> & { id?: string };
+
+export type CustomerScopeOption = {
+  id: string;
+  name: string;
+  is_active: boolean;
+  subgroups?: { id: string; name: string }[];
+};
+
+export async function listCustomerScopes(): Promise<CustomerScopeOption[]> {
+  const res = await api.get("/api/customers/scopes/");
+  return res.data;
+}
+
 export type Customer = {
   id: string;
   name: string;
@@ -31,6 +59,7 @@ export type Customer = {
   is_active: boolean;
   created_at: string;
   contacts?: CustomerContact[];
+  subgroups?: CustomerSubgroup[];
 };
 
 export async function listCustomers(params: { q?: string; include_inactive?: boolean } = {}) {
@@ -48,6 +77,7 @@ export async function createCustomer(payload: {
   sla?: string;
   sla_rules?: CustomerSlaRules;
   sla_calendar?: CustomerSlaCalendar;
+  subgroups?: CustomerSubgroupPayload[];
 }) {
   const csrfToken = await ensureCsrf();
   const res = await api.post("/api/settings/customers/", payload, {
@@ -66,6 +96,7 @@ export async function updateCustomer(
     sla_rules: CustomerSlaRules;
     sla_calendar: CustomerSlaCalendar;
     is_active: boolean;
+    subgroups: CustomerSubgroupPayload[];
   }>
 ) {
   const csrfToken = await ensureCsrf();

@@ -3,6 +3,7 @@ import { ensureCsrf } from "./auth";
 
 export type DashboardQueryParams = {
   customer?: string;
+  subgroups?: string[];
   period?: "last_7d" | "last_30d" | "last_90d" | "since" | "between" | "all";
   date_from?: string;
   date_to?: string;
@@ -12,6 +13,7 @@ export async function fetchDashboard(params?: DashboardQueryParams): Promise<any
   const qs = new URLSearchParams();
 
   if (params?.customer) qs.set("customer", params.customer);
+  params?.subgroups?.forEach((id) => qs.append("subgroups", id));
   if (params?.period) qs.set("period", params.period);
   if (params?.date_from) qs.set("date_from", params.date_from);
   if (params?.date_to) qs.set("date_to", params.date_to);

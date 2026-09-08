@@ -860,6 +860,7 @@ class AlertListCreateView(generics.ListCreateAPIView):
             Alert.objects
             .filter(is_deleted=False)
             .select_related("customer", "owner", "case")
+            .prefetch_related("subgroups")
         )
 
         if not user.is_staff:
@@ -1034,7 +1035,7 @@ class AlertListForCaseView(generics.ListAPIView):
 
     def get_queryset(self):
         case = self.get_case()
-        return Alert.objects.filter(case=case, is_deleted=False).order_by("-created_at")
+        return Alert.objects.filter(case=case, is_deleted=False).prefetch_related("subgroups").order_by("-created_at")
 
 
 class AlertEscalateToCaseView(APIView):
@@ -3130,6 +3131,23 @@ class SettingsClassificationRetrieveUpdateDestroyView(generics.RetrieveUpdateDes
 ###############
 ### Customers
 ###############
+class CustomerScopeListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        allowed = get_accessible_customer_ids(request.user)
+        customers = Customer.objects.filter(pk__in=allowed).prefetch_related("subgroups").order_by("name")
+        return Response([
+            {
+                "id": str(customer.pk),
+                "name": customer.name,
+                "is_active": customer.is_active,
+                "subgroups": [{"id": str(group.pk), "name": group.name} for group in customer.subgroups.all()],
+            }
+            for customer in customers
+        ])
+
+
 class SettingsCustomerListCreateView(generics.ListCreateAPIView):
     serializer_class = CustomerSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
@@ -3139,7 +3157,7 @@ class SettingsCustomerListCreateView(generics.ListCreateAPIView):
         super().initial(request, *args, **kwargs)
 
     def get_queryset(self):
-        qs = Customer.objects.all().order_by("name")
+        qs = Customer.objects.prefetch_related("contacts", "subgroups").order_by("name")
         if self.request.query_params.get("include_inactive") != "1":
             qs = qs.filter(is_active=True)
         q = (self.request.query_params.get("q") or "").strip()
@@ -3162,7 +3180,7 @@ class SettingsCustomerListCreateView(generics.ListCreateAPIView):
 class SettingsCustomerRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = CustomerSerializer
     permission_classes = [IsAuthenticated, HasPermissionCode]
-    queryset = Customer.objects.all()
+    queryset = Customer.objects.prefetch_related("contacts", "subgroups")
 
     def initial(self, request, *args, **kwargs):
         if request.method == "GET":

@@ -12,6 +12,7 @@ export type AlertListItem = {
   description: string;
   customer?: string | null;
   customer_name?: string | null;
+  subgroups?: string[];
   owner?: number | null;
   owner_id?: number | null;
   owner_username?: string | null;
@@ -102,6 +103,7 @@ export async function updateAlert(
     classification: string;
     outcome: string;
     customer: string | null;
+    subgroups: string[];
     owner: number | null;
     iocs: any;
     assets: any;

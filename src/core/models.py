@@ -68,6 +68,7 @@ class Alert(models.Model):
     is_deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     customer = models.ForeignKey("core.Customer", null=True, blank=True, on_delete=models.PROTECT, related_name="alerts")
+    subgroups = models.ManyToManyField("core.CustomerSubgroup", blank=True, related_name="alerts")
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="alerts_owned",)
     outcome = models.CharField(max_length=50, choices=Outcome.choices, default=Outcome.UKN, db_index=True,)
 
@@ -166,6 +167,7 @@ class Case(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
     customer = models.ForeignKey("core.Customer", null=True, blank=True, on_delete=models.PROTECT, related_name="cases")
+    subgroups = models.ManyToManyField("core.CustomerSubgroup", blank=True, related_name="cases")
     iocs = models.JSONField(default=list, blank=True)
     assets = models.JSONField(default=list, blank=True)
 
@@ -695,6 +697,20 @@ class Customer(models.Model):
             return timezone.timedelta(days=value * 30)
 
         return None
+
+    def __str__(self):
+        return self.name
+
+
+class CustomerSubgroup(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name="subgroups")
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    contacts = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        ordering = ["name", "id"]
 
     def __str__(self):
         return self.name

@@ -4,12 +4,13 @@ import StatusBadge from "../../ui/StatusBadge";
 import SeverityBadge from "../../ui/SeverityBadge";
 import ClassificationBadge from "../../ui/ClassificationBadge";
 import OutcomeBadge from "../../ui/OutcomeBadge";
+import CustomerScopeBadge from "../../ui/CustomerScopeBadge";
 import { Activity, ArchiveButton, CancelButton, DeleteButton, Info, NotebookText, OpenCloseToggleButton, SaveButton, UserRound, Workflow, LeftButton } from "../../ui/IconButton";
 import { generateCaseReport } from "../../../api/caseReports";
 import { updateTicket } from "../../../api/cases";
 import type { CaseDetail } from "../../../api/caseDetail";
 import type { UserLite } from "../../../api/usersLite";
-import type { Customer } from "../../../api/settingsCustomers";
+import type { CustomerScopeOption as Customer } from "../../../api/settingsCustomers";
 import type { ClassificationItem, SeverityItem } from "../../../api/dataModels";
 import { formatDate, outcomeOptions, statusOptions } from "./utils";
 
@@ -276,16 +277,15 @@ export default function CaseHeader(props: Props) {
           <div className="py-2">
             <div className="flex flex-wrap items-center gap-2">
               {(props.caseItem as any).case_number ? <span className="text-sm font-medium text-muted-foreground">#{(props.caseItem as any).case_number}</span> : null}
-              <InlineEditableBadge
-                value={String((props.caseItem as any)?.customer || "")}
+              <CustomerScopeBadge
+                customer={props.caseItem.customer || null}
+                subgroups={props.caseItem.subgroups ?? []}
+                customers={props.customers}
                 disabled={!props.canUpdateCase || props.busyCaseId === (props.caseItem as any)?.id}
-                ariaLabel="Change customer"
-                options={props.customers.filter((c) => c.is_active).sort((a, b) => a.name.localeCompare(b.name)).map((c) => ({ value: String(c.id), label: c.name }))}
                 onChange={async (next) => {
-                  const nextCustomerId = next || null;
                   props.setBusyCaseId((props.caseItem as any).id);
                   try {
-                    await updateTicket(props.ticketId, { customer: nextCustomerId } as any);
+                    await updateTicket(props.ticketId, next);
                     props.push({ kind: "success", title: "Customer updated" });
                     await props.refreshAll();
                   } catch (err: any) {

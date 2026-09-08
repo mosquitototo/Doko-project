@@ -5,6 +5,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
 import ClassificationBadge from "../components/ui/ClassificationBadge";
 import OutcomeBadge from "../components/ui/OutcomeBadge";
+import CustomerScopeBadge from "../components/ui/CustomerScopeBadge";
 import { fetchAlertDetail, type AlertDetail as AlertDetailType } from "../api/alerts";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
 import { updateAlert } from "../api/alerts";
@@ -13,7 +14,7 @@ import AlertMergeDialog from "../components/ui/AlertMergeDialog";
 import { escalateAlert, mergeAlertIntoCase, deleteAlert } from "../api/alertsActions";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { useMe } from "../contexts/MeContext";
-import { listCustomers, type Customer } from "../api/settingsCustomers";
+import { listCustomerScopes, type CustomerScopeOption as Customer } from "../api/settingsCustomers";
 import KeyValueEditor from "../components/ui/KeyValueEditor";
 import {
   listSeverities,
@@ -472,8 +473,8 @@ export default function AlertDetail() {
   }, [location.pathname]);
 
   useEffect(() => {
-    listCustomers({ include_inactive: false })
-      .then((r) => setCustomers(r.results ?? []))
+    listCustomerScopes()
+      .then(setCustomers)
       .catch(() => setCustomers([]));
   }, []);
 
@@ -905,23 +906,15 @@ export default function AlertDetail() {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <SlaBadge state={safeSlaState} />
               
-              <InlineEditableBadge
-                value={String((item as any).customer || "")}
+              <CustomerScopeBadge
+                customer={item.customer || null}
+                subgroups={item.subgroups ?? []}
+                customers={customers}
                 disabled={!item || busyAlertId === item.id || !canUpdate}
-                ariaLabel="Change customer"
-                options={customers
-                  .filter((c) => c.is_active)
-                  .slice()
-                  .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((c) => ({
-                    value: String(c.id),
-                    label: c.name,
-                  }))}
                 onChange={async (next) => {
-                  const nextCustomerId = next || null;
                   setBusyAlertId(item.id);
                   try {
-                    await updateAlert(alertId, { customer: nextCustomerId } as any);
+                    await updateAlert(alertId, next);
                     push({ kind: "success", title: "Customer updated" });
                     await refreshAll();
                   } catch (err: any) {

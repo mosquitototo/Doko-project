@@ -2,8 +2,18 @@ from django.conf import settings
 from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 
-from .models import Alert, ReportInstance, UserProfile
+from .models import Alert, Case, ReportInstance, UserProfile
 from .sla import alert_snapshot
+
+
+@receiver(post_save, sender=Alert)
+@receiver(post_save, sender=Case)
+def remove_foreign_customer_subgroups(sender, instance, raw=False, **kwargs):
+    if raw:
+        return
+    foreign_ids = list(instance.subgroups.exclude(customer_id=instance.customer_id).values_list("id", flat=True))
+    if foreign_ids:
+        instance.subgroups.remove(*foreign_ids)
 
 
 @receiver(post_save, sender=Alert)

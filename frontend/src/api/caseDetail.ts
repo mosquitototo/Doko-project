@@ -46,6 +46,7 @@ export type CaseDetail = {
   comments?: any[];
   customer?: string | null;
   customer_name?: string | null;
+  subgroups?: string[];
   case_sources?: string[];
   owner_id_read?: number | null;
   iocs?: CaseDetailRow[];

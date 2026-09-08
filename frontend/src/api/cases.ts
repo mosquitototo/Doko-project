@@ -20,6 +20,7 @@ export type CaseListItem = {
   owner_username?: string | null;
   customer?: string | null;
   customer_name?: string | null;
+  subgroups?: string[];
 
   has_recent_activity?: boolean;
   recent_activity_at?: string | null;
@@ -93,6 +94,7 @@ export type CreateCasePayload = {
   status?: string;
 
   customer?: string | null; 
+  subgroups?: string[];
   severity?: string; 
   classification?: string; 
   owner_id?: number; 
@@ -120,6 +122,7 @@ export async function updateTicket(
     classification: string;
     outcome: string;
     customer: string | null;
+    subgroups: string[];
     owner_id: number | null;
     iocs: any;
     assets: any;

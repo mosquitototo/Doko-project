@@ -35,4 +35,5 @@ class SlaMigrationTests(TransactionTestCase):
             self.assertEqual(upgraded.customer_id, customer.pk)
             self.assertEqual(new_apps.get_model("core", "DashboardPreference").objects.get(pk=pref.pk).widgets, ["alerts_open", "sla_global", "alerts_out_of_hours"])
         finally:
-            MigrationExecutor(connection).migrate(new_target)
+            executor = MigrationExecutor(connection)
+            executor.migrate(executor.loader.graph.leaf_nodes())

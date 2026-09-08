@@ -17,9 +17,12 @@ import {
   type CustomerContact,
   type CustomerSlaRules,
   type CustomerSlaUnit,
+  type CustomerSubgroupPayload,
+  type CustomerSubgroupContact,
 } from "../../api/settingsCustomers";
 import { listSeverities, type SeverityItem } from "../../api/dataModels";
 import CustomerSlaCalendarFields from "../../components/settings/CustomerSlaCalendarFields";
+import CustomerSubgroupFields from "../../components/settings/CustomerSubgroupFields";
 import { calendarError, customerSlaCalendar } from "../../utils/customerSlaCalendar";
 import {
   EditGenButton,
@@ -27,7 +30,97 @@ import {
   DeleteButton,
   NewCustomerButton,
   NewGenButton,
+  ChevronDown,
 } from "../../components/ui/IconButton";
+
+function customerSaveError(error: unknown): string {
+  const response = (error as { response?: { data?: unknown; status?: number } })?.response;
+  const flatten = (value: unknown, path: string): string[] => {
+    if (Array.isArray(value)) return value.flatMap((item, index) => flatten(item, typeof item === "object" && item !== null ? `${path} ${index + 1}` : path));
+    if (value && typeof value === "object") return Object.entries(value).flatMap(([key, item]) => flatten(item, [path, key.replaceAll("_", " ")].filter(Boolean).join(" · ")));
+    return value == null ? [] : [`${path ? `${path}: ` : ""}${String(value)}`];
+  };
+  return flatten(response?.data, "").join("\n") || `Unable to save customer (${response?.status ?? "network error"}).`;
+}
+
+function subgroupError(groups: CustomerSubgroupPayload[]): string | null {
+  for (const [index, group] of groups.entries()) {
+    if (!group.name.trim()) return `Subgroup ${index + 1}: name is required.`;
+    for (const [contactIndex, contact] of group.contacts.entries()) {
+      if (!contact.name.trim()) return `${group.name}, contact ${contactIndex + 1}: name is required.`;
+      if (contact.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact.email.trim())) return `${group.name}, contact ${contactIndex + 1}: email must be valid or left empty.`;
+    }
+  }
+  return null;
+}
+
+function ReadOnlyContacts({ contacts }: { contacts: CustomerSubgroupContact[] }) {
+  return contacts.length ? (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {contacts.map((contact, index) => (
+        <div key={index} className="min-w-0 space-y-1 rounded-2xl border border-border bg-background p-3 text-sm">
+          <div className="break-words font-medium text-foreground">{contact.name || "Unnamed contact"}</div>
+          <div className="break-words text-muted-foreground">Title: {contact.title || "—"}</div>
+          <div className="break-all text-muted-foreground">Email: {contact.email || "—"}</div>
+          <div className="break-words text-muted-foreground">Phone: {contact.phone || "—"}</div>
+          {"is_active" in contact ? <StatusPill active={!!contact.is_active} /> : null}
+        </div>
+      ))}
+    </div>
+  ) : <p className="text-sm text-muted-foreground">No contacts.</p>;
+}
+
+function CustomerDetails({ customer }: { customer: Customer }) {
+  const calendar = customerSlaCalendar(customer.sla_calendar);
+  const weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const rules = Object.entries(normalizeSlaRules(customer.sla_rules));
+  const minutes = (value: string) => { const [hours, mins] = value.split(":").map(Number); return hours * 60 + mins; };
+  const hours = (minutes(calendar.work_end) - minutes(calendar.work_start)) / 60;
+  return (
+    <div id={`customer-details-${customer.id}`} className="space-y-5 border-t border-border bg-muted/20 px-5 py-5">
+      <div>
+        <FieldLabel>Customer UUID</FieldLabel>
+        <p className="mt-2 break-all font-mono text-xs text-foreground">{customer.id}</p>
+      </div>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="space-y-3">
+          <FieldLabel>SLA notes and rules</FieldLabel>
+          <p className="whitespace-pre-wrap break-words text-sm text-foreground">{customer.sla || "No SLA notes."}</p>
+          {rules.length ? <div className="flex flex-wrap gap-2">{rules.map(([code, rule]) => <StatPill key={code}>{code}: {rule.value} {rule.unit}</StatPill>)}</div> : <p className="text-sm text-muted-foreground">No SLA rules.</p>}
+        </section>
+        <section className="space-y-3">
+          <FieldLabel>Working-time SLA</FieldLabel>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt className="text-muted-foreground">Mode</dt><dd>{calendar.enabled ? "Working time" : "Elapsed time (working calendar disabled)"}</dd>
+            <dt className="text-muted-foreground">Timezone</dt><dd>{calendar.timezone}</dd>
+            <dt className="text-muted-foreground">Weekdays</dt><dd>{calendar.weekdays.map((day) => weekdays[day]).join(", ") || "None"}</dd>
+            <dt className="text-muted-foreground">Working hours</dt><dd>{calendar.work_start}–{calendar.work_end}</dd>
+            <dt className="text-muted-foreground">SLA day</dt><dd>{Number.isFinite(hours) ? Number(hours.toFixed(2)) : "—"} working hours</dd>
+            <dt className="text-muted-foreground">SLA week</dt><dd>{calendar.weekdays.length} working days</dd>
+            <dt className="text-muted-foreground">SLA month</dt><dd>{calendar.month_days} working days</dd>
+          </dl>
+          <FieldLabel>Customer holidays</FieldLabel>
+          {calendar.holidays.length ? <ul className="space-y-2 text-sm text-foreground">{calendar.holidays.map((holiday, index) => <li key={index} className="break-words">{holiday.date}{holiday.label ? ` · ${holiday.label}` : ""} · {holiday.annual ? "Repeats annually" : "One-time"}</li>)}</ul> : <p className="text-sm text-muted-foreground">No holidays configured.</p>}
+        </section>
+      </div>
+      <section className="space-y-3">
+        <FieldLabel>Customer contacts</FieldLabel>
+        <ReadOnlyContacts contacts={customer.contacts ?? []} />
+      </section>
+      <section className="space-y-3">
+        <FieldLabel>Subgroups ({customer.subgroups?.length ?? 0})</FieldLabel>
+        {customer.subgroups?.length ? customer.subgroups.map((group) => (
+          <Card key={group.id} className="space-y-3 p-4">
+            <h3 className="break-words text-sm font-semibold text-foreground">{group.name}</h3>
+            <p className="break-all font-mono text-xs text-muted-foreground">UUID: {group.id}</p>
+            <p className="whitespace-pre-wrap break-words text-sm text-foreground">{group.description || "No description."}</p>
+            <ReadOnlyContacts contacts={group.contacts} />
+          </Card>
+        )) : <p className="text-sm text-muted-foreground">No subgroups.</p>}
+      </section>
+    </div>
+  );
+}
 
 function FieldLabel({
   children,
@@ -242,12 +335,17 @@ export default function SettingsCustomers() {
   const [q, setQ] = useState("");
   const [items, setItems] = useState<Customer[]>([]);
   const [count, setCount] = useState(0);
+  const [expandedCustomerId, setExpandedCustomerId] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createSla, setCreateSla] = useState("");
   const [createSlaRules, setCreateSlaRules] = useState<CustomerSlaRules>({});
   const [createCalendar, setCreateCalendar] = useState(customerSlaCalendar);
+  const [createSubgroups, setCreateSubgroups] = useState<CustomerSubgroupPayload[]>([]);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [editSubgroups, setEditSubgroups] = useState<CustomerSubgroupPayload[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
   const [disableTarget, setDisableTarget] = useState<{
@@ -397,6 +495,8 @@ export default function SettingsCustomers() {
               setCreateSla("");
               setCreateSlaRules({});
               setCreateCalendar(customerSlaCalendar());
+              setCreateSubgroups([]);
+              setCreateError(null);
             }}
             disabled={loading || !canManage}
             iconOnly={false}
@@ -466,7 +566,8 @@ export default function SettingsCustomers() {
           <div className="overflow-x-auto">
             <div className="min-w-[980px]">
               <div className="grid grid-cols-12 gap-3 border-b border-border bg-background/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-                <div className="col-span-3">Name</div>
+                <div className="col-span-2">Name</div>
+                <div className="col-span-1">Subgroups</div>
                 <div className="col-span-4">SLA</div>
                 <div className="col-span-3">ID</div>
                 <div className="col-span-1">Status</div>
@@ -475,18 +576,29 @@ export default function SettingsCustomers() {
 
               <div className="divide-y divide-border">
                 {visible.map((c) => (
+                  <div key={c.id}>
                   <div
-                    key={c.id}
-                    className="grid grid-cols-12 items-center gap-3 px-5 py-4 transition hover:bg-accent/30"
+                    className="grid cursor-pointer grid-cols-12 items-center gap-3 px-5 py-4 transition hover:bg-accent/30"
+                    onClick={() => setExpandedCustomerId(expandedCustomerId === c.id ? null : c.id)}
                   >
-                    <div className="col-span-3 min-w-0">
-                      <div
-                        className="truncate text-sm font-medium text-foreground"
+                    <div className="col-span-2 min-w-0">
+                      <button
+                        type="button"
+                        aria-expanded={expandedCustomerId === c.id}
+                        aria-controls={`customer-details-${c.id}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setExpandedCustomerId(expandedCustomerId === c.id ? null : c.id);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg text-left text-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         title={c.name}
                       >
-                        {c.name}
-                      </div>
+                        <ChevronDown aria-hidden className={`h-4 w-4 shrink-0 transition-transform ${expandedCustomerId === c.id ? "rotate-180" : ""}`} />
+                        <span className="truncate">{c.name}</span>
+                      </button>
                     </div>
+
+                    <div className="col-span-1"><StatPill>{c.subgroups?.length ?? 0}</StatPill></div>
 
                     <div className="col-span-4 min-w-0">
                       <div
@@ -522,11 +634,15 @@ export default function SettingsCustomers() {
                       <StatusPill active={!!c.is_active} />
                     </div>
 
-                    <div className="col-span-1 flex justify-end gap-2">
+                    <div className="col-span-1 flex justify-end gap-2" onClick={(event) => event.stopPropagation()}>
                       {canManage ? (
                         <>
                           <EditGenButton
-                            onClick={() => setEditCustomer(c)}
+                            onClick={() => {
+                              setEditCustomer(c);
+                              setEditSubgroups((c.subgroups ?? []).map((group) => ({ ...group, contacts: group.contacts.map((contact) => ({ ...contact })) })));
+                              setEditError(null);
+                            }}
                             disabled={loading}
                             title="Edit customer"
                           />
@@ -551,6 +667,8 @@ export default function SettingsCustomers() {
                       ) : null}
                     </div>
                   </div>
+                  {expandedCustomerId === c.id ? <CustomerDetails customer={c} /> : null}
+                  </div>
                 ))}
               </div>
             </div>
@@ -567,8 +685,10 @@ export default function SettingsCustomers() {
         onCancel={() => setCreateOpen(false)}
         onConfirm={async () => {
           if (!canManage || loading) return;
+          setCreateError(null);
           const name = createName.trim();
           if (!name) {
+            setCreateError("Customer name is required.");
             push({
               kind: "error",
               title: "Missing fields",
@@ -576,25 +696,30 @@ export default function SettingsCustomers() {
             });
             return;
           }
+          const groupsError = subgroupError(createSubgroups);
+          if (groupsError) {
+            setCreateError(groupsError);
+            return;
+          }
           setLoading(true);
           try {
             const error = calendarError(createCalendar);
             if (error) {
+              setCreateError(error);
               push({ kind: "error", title: "SLA calendar", message: error });
               return;
             }
-            await createCustomer({ name, sla: createSla, sla_rules: normalizeSlaRules(createSlaRules), sla_calendar: createCalendar });
+            await createCustomer({ name, sla: createSla, sla_rules: normalizeSlaRules(createSlaRules), sla_calendar: createCalendar, subgroups: createSubgroups });
             push({ kind: "success", title: "Created" });
             setCreateOpen(false);
             setCreateSlaRules({});
             await load();
           } catch (e: any) {
+            setCreateError(customerSaveError(e));
             push({
               kind: "error",
               title: "Error",
-              message: String(
-                e?.response?.data?.sla_calendar ?? e?.response?.data?.detail ?? e?.response?.status ?? "network"
-              ),
+              message: customerSaveError(e),
             });
           } finally {
             setLoading(false);
@@ -602,6 +727,7 @@ export default function SettingsCustomers() {
         }}
         message={
           <div className="space-y-4">
+            {createError ? <div role="alert" className="whitespace-pre-wrap rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-400">{createError}</div> : null}
             <label className="block space-y-2">
               <FieldLabel required>Name</FieldLabel>
               <SettingInput
@@ -706,6 +832,7 @@ export default function SettingsCustomers() {
                 </div>
               </div>
               <CustomerSlaCalendarFields value={createCalendar} onChange={setCreateCalendar} disabled={loading || !canManage} />
+              <CustomerSubgroupFields key={createOpen ? "create-open" : "create-closed"} value={createSubgroups} onChange={setCreateSubgroups} disabled={loading || !canManage} />
             </div>
           </div>
         }
@@ -726,8 +853,11 @@ export default function SettingsCustomers() {
         onConfirm={async () => {
           if (!editCustomer || !canManage || loading) return;
 
+          setEditError(null);
+
           const name = editCustomer.name.trim();
           if (!name) {
+            setEditError("Customer name is required.");
             push({
               kind: "error",
               title: "Missing fields",
@@ -741,6 +871,7 @@ export default function SettingsCustomers() {
           );
 
           if (invalidContact) {
+            setEditError("Contact email must be valid or left empty.");
             push({
               kind: "error",
               title: "Invalid contact email",
@@ -760,6 +891,7 @@ export default function SettingsCustomers() {
           });
 
           if (incompleteContact) {
+            setEditError("Every filled contact must have a name.");
             push({
               kind: "error",
               title: "Missing contact name",
@@ -768,20 +900,29 @@ export default function SettingsCustomers() {
             return;
           }
 
+          const groupsError = subgroupError(editSubgroups);
+          if (groupsError) {
+            setEditError(groupsError);
+            return;
+          }
+
           setLoading(true);
           try {
             const calendar = customerSlaCalendar(editCustomer.sla_calendar);
             const error = calendarError(calendar);
             if (error) {
+              setEditError(error);
               push({ kind: "error", title: "SLA calendar", message: error });
               return;
             }
-            await updateCustomer(editCustomer.id, {
+            const savedCustomer = await updateCustomer(editCustomer.id, {
               name,
               sla: editCustomer.sla ?? "",
               sla_rules: normalizeSlaRules((editCustomer as any).sla_rules),
               sla_calendar: calendar,
+              subgroups: editSubgroups,
             });
+            setEditSubgroups(savedCustomer.subgroups ?? editSubgroups);
 
             const existing = await listCustomerContacts(editCustomer.id, true);
             const existingById = new Map(
@@ -819,12 +960,11 @@ export default function SettingsCustomers() {
 
             await load();
           } catch (e: any) {
+            setEditError(customerSaveError(e));
             push({
               kind: "error",
               title: "Error",
-              message: String(
-                e?.response?.data?.sla_calendar ?? e?.response?.data?.detail ?? e?.response?.status ?? "network"
-              ),
+              message: customerSaveError(e),
             });
           } finally {
             setLoading(false);
@@ -833,6 +973,7 @@ export default function SettingsCustomers() {
         message={
           editCustomer ? (
             <div className="space-y-5">
+              {editError ? <div role="alert" className="whitespace-pre-wrap rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-700 dark:text-red-400">{editError}</div> : null}
               <Card className="p-5">
                 <div className="mb-4 flex items-center justify-between">
                   <div className="text-sm font-semibold text-foreground">
@@ -1089,6 +1230,7 @@ export default function SettingsCustomers() {
                   </div>
                 )}
               </Card>
+              <CustomerSubgroupFields key={editCustomer.id} value={editSubgroups} onChange={setEditSubgroups} disabled={loading || !canManage} />
             </div>
           ) : null
         }

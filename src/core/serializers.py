@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.utils import timezone
+from django.db import transaction
 
 from .html_sanitizer import sanitize_html
 from .rbac import get_accessible_customer_ids, user_has_perm
@@ -20,6 +21,7 @@ from .models import (
     Classification, 
     CustomerContact, 
     Customer, 
+    CustomerSubgroup,
     WorkbookInstanceItem,
     WorkbookInstance, 
     WorkbookTemplateItem,
@@ -202,7 +204,29 @@ class TimelineItemSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "updated_at", "date"]
 
 
-class AlertSerializer(serializers.ModelSerializer):
+class CustomerSubgroupAssignmentMixin:
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if "subgroups" not in attrs:
+            return attrs
+        customer = attrs.get("customer", getattr(self.instance, "customer", None))
+        customer_id = getattr(customer, "pk", None)
+        if not self.instance and customer_id is None:
+            customer_id = DEFAULT_CUSTOMER_ID
+        if any(group.customer_id != customer_id for group in attrs["subgroups"]):
+            raise serializers.ValidationError({"subgroups": "Every subgroup must belong to the selected customer."})
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        return super().create(validated_data)
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        return super().update(instance, validated_data)
+
+
+class AlertSerializer(CustomerSubgroupAssignmentMixin, serializers.ModelSerializer):
     description = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     case = serializers.UUIDField(source="case.id", read_only=True, allow_null=True)
     customer_id = serializers.UUIDField(source="customer.id", read_only=True)
@@ -234,6 +258,7 @@ class AlertSerializer(serializers.ModelSerializer):
             "created_at",
             "customer",
             "customer_name",
+            "subgroups",
             "customer_id",
             "owner",
             "owner_id",
@@ -445,7 +470,7 @@ class CaseListSerializer(serializers.ModelSerializer):
         ]
 
 
-class CaseSerializer(serializers.ModelSerializer):
+class CaseSerializer(CustomerSubgroupAssignmentMixin, serializers.ModelSerializer):
     description = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     owner_id = serializers.PrimaryKeyRelatedField(
         source="owner", queryset=User.objects.all(), write_only=True, required=False
@@ -480,6 +505,7 @@ class CaseSerializer(serializers.ModelSerializer):
             "archived_at", 
             "outcome", 
             "workbook_template_id", 
+            "subgroups",
             "auto_followup_action", 
             "auto_followup_enabled", 
             "auto_followup_delay_value", 
@@ -585,6 +611,7 @@ class CaseDetailSerializer(serializers.ModelSerializer):
             "customer_id", 
             "customer", 
             "case_sources",
+            "subgroups",
             "iocs", 
             "assets", 
             "archived_at", 
@@ -904,8 +931,25 @@ class CustomerContactSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "customer"]
 
 
+class CustomerSubgroupContactSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=200)
+    email = serializers.EmailField(max_length=255, required=False, allow_blank=True, default="")
+    phone = serializers.CharField(max_length=50, required=False, allow_blank=True, default="")
+    title = serializers.CharField(max_length=200, required=False, allow_blank=True, default="")
+
+
+class CustomerSubgroupSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(required=False)
+    contacts = CustomerSubgroupContactSerializer(many=True, required=False)
+
+    class Meta:
+        model = CustomerSubgroup
+        fields = ["id", "name", "description", "contacts"]
+
+
 class CustomerSerializer(serializers.ModelSerializer):
     contacts = CustomerContactSerializer(many=True, read_only=True)
+    subgroups = CustomerSubgroupSerializer(many=True, required=False)
 
     class Meta:
         model = Customer
@@ -918,8 +962,55 @@ class CustomerSerializer(serializers.ModelSerializer):
             "is_active",
             "created_at",
             "contacts",
+            "subgroups",
         ]
         read_only_fields = ["id", "created_at"]
+
+    def validate_subgroups(self, value):
+        nested = CustomerSubgroupSerializer(data=value, many=True)
+        nested.is_valid(raise_exception=True)
+        value = nested.validated_data
+        ids = [group["id"] for group in value if "id" in group]
+        existing = set(self.instance.subgroups.values_list("id", flat=True)) if self.instance else set()
+        if len(ids) != len(set(ids)) or any(pk not in existing for pk in ids):
+            raise serializers.ValidationError("Unknown, duplicate or foreign subgroup UUID.")
+        names = [group["name"].casefold() for group in value]
+        if len(names) != len(set(names)):
+            raise serializers.ValidationError("Subgroup names must be unique within a customer.")
+        return value
+
+    def _save_subgroups(self, customer, groups):
+        kept = []
+        for group in groups:
+            pk = group.pop("id", None)
+            if pk is None:
+                obj = customer.subgroups.create(**group)
+            else:
+                obj = customer.subgroups.get(pk=pk)
+                for key, value in group.items():
+                    setattr(obj, key, value)
+                obj.save()
+            kept.append(obj.pk)
+        customer.subgroups.exclude(pk__in=kept).delete()
+        getattr(customer, "_prefetched_objects_cache", {}).pop("subgroups", None)
+
+    @transaction.atomic
+    def create(self, validated_data):
+        groups = validated_data.pop("subgroups", [])
+        customer = super().create(validated_data)
+        self._save_subgroups(customer, groups)
+        return customer
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        Customer.objects.select_for_update().get(pk=instance.pk)
+        groups = validated_data.pop("subgroups", None)
+        if groups is not None:
+            groups = self.validate_subgroups(groups)
+        customer = super().update(instance, validated_data)
+        if groups is not None:
+            self._save_subgroups(customer, groups)
+        return customer
 
     def validate_sla_calendar(self, value):
         try:

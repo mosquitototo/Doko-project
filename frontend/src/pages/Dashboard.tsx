@@ -22,6 +22,7 @@ import {
   ActionButton,
 } from "../components/ui/IconButton";
 import Card from "../components/ui/Card";
+import CustomerScopeBadge from "../components/ui/CustomerScopeBadge";
 import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
 import {
@@ -31,7 +32,7 @@ import {
   updateDashboardPreferences,
   type DashboardQueryParams,
 } from "../api/dashboard";
-import { listCustomers, type Customer } from "../api/settingsCustomers";
+import { listCustomerScopes, type CustomerScopeOption as Customer } from "../api/settingsCustomers";
 
 function formatDate(iso: string) {
   try {
@@ -777,6 +778,12 @@ function normalizeDashboard(raw: any) {
       )
         ? safe.charts.cases_by_outcome_period
         : [],
+      alerts_by_subgroup_period: Array.isArray(safe?.charts?.alerts_by_subgroup_period)
+        ? safe.charts.alerts_by_subgroup_period
+        : [],
+      cases_by_subgroup_period: Array.isArray(safe?.charts?.cases_by_subgroup_period)
+        ? safe.charts.cases_by_subgroup_period
+        : [],
     },
     personal: {
       my_open_cases: Array.isArray(safe?.personal?.my_open_cases)
@@ -792,6 +799,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [customerId, setCustomerId] = useState<string>("");
+  const [subgroupIds, setSubgroupIds] = useState<string[]>([]);
   const [period, setPeriod] =
     useState<DashboardQueryParams["period"]>("last_90d");
   const [dateFrom, setDateFrom] = useState("");
@@ -807,8 +815,8 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    listCustomers({ include_inactive: false })
-      .then((r) => setCustomers(r.results ?? []))
+    listCustomerScopes()
+      .then(setCustomers)
       .catch(() => setCustomers([]));
   }, []);
 
@@ -873,6 +881,7 @@ export default function Dashboard() {
 
     fetchDashboard({
       customer: customerId || undefined,
+      subgroups: subgroupIds,
       period,
       date_from: dateFrom || undefined,
       date_to: dateTo || undefined,
@@ -913,7 +922,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [customerId, period, dateFrom, dateTo]);
+  }, [customerId, subgroupIds, period, dateFrom, dateTo]);
 
   const persistWidgets = async (next: string[]) => {
     setSavingLayout(true);
@@ -1193,6 +1202,16 @@ export default function Dashboard() {
           />
         );
 
+      case "alerts_by_subgroup_period":
+      case "cases_by_subgroup_period":
+        return (
+          <PieCard
+            title={widgetId === "alerts_by_subgroup_period" ? "Alerts by subgroup" : "Cases by subgroup"}
+            rows={charts[widgetId] ?? []}
+            subtitle={`${periodLabel} • Subgroup assignments`}
+          />
+        );
+
       case "open_cases_by_customer":
         return (
           <PieCard
@@ -1405,23 +1424,14 @@ export default function Dashboard() {
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border bg-card px-3 shadow-sm">
             <Filter className="h-4 w-4 text-muted-foreground" />
-            <select
-              className="border-none bg-transparent pr-2 text-sm text-foreground outline-none"
-              value={customerId}
-              onChange={(e) => setCustomerId(e.target.value)}
-            >
-              <option value="">All customers</option>
-              {customers
-                .filter((c) => c.is_active)
-                .filter((c) => (allowedIds ? allowedIds.has(String(c.id)) : true))
-                .slice()
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-            </select>
+            <CustomerScopeBadge
+              customer={customerId || null}
+              subgroups={subgroupIds}
+              customers={customers.filter((c) => allowedIds ? allowedIds.has(String(c.id)) : true)}
+              emptyLabel="All customers"
+              display={<span className="inline-flex items-center gap-2 pr-2 text-sm text-foreground">{customers.find((c) => c.id === customerId)?.name ?? "All customers"}<span aria-hidden="true">⌄</span></span>}
+              onChange={(scope) => { setCustomerId(scope.customer ?? ""); setSubgroupIds(scope.subgroups); }}
+            />
           </div>
 
           <div className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border bg-card px-3 shadow-sm">

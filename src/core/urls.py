@@ -31,6 +31,7 @@ from .views import (
     SettingsClassificationListCreateView,
     SettingsClassificationRetrieveUpdateDestroyView,
     SettingsCustomerListCreateView,
+    CustomerScopeListView,
     SettingsCustomerRetrieveUpdateDestroyView,
     SettingsCustomerContactListCreateView,
     SettingsCustomerContactRetrieveUpdateDestroyView,
@@ -233,6 +234,7 @@ urlpatterns = [
     path("settings/data-models/classifications/<int:pk>/", SettingsClassificationRetrieveUpdateDestroyView.as_view()),
 
     path("settings/customers/", SettingsCustomerListCreateView.as_view()),
+    path("customers/scopes/", CustomerScopeListView.as_view()),
     path("settings/customers/<uuid:pk>/", SettingsCustomerRetrieveUpdateDestroyView.as_view()),
     path("settings/customers/<uuid:customer_id>/contacts/", SettingsCustomerContactListCreateView.as_view()),
     path("settings/customer-contacts/<uuid:public_id>/", SettingsCustomerContactRetrieveUpdateDestroyView.as_view()),

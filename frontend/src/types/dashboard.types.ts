@@ -96,6 +96,8 @@ export type DashboardData = {
     cases_by_severity_period: DashboardRow[];
     cases_by_classification_period: DashboardRow[];
     cases_by_outcome_period: DashboardRow[];
+    alerts_by_subgroup_period: DashboardRow[];
+    cases_by_subgroup_period: DashboardRow[];
     open_cases_by_customer: DashboardRow[];
     open_alerts_by_customer: DashboardRow[];
     open_hunts_by_customer: DashboardRow[];

@@ -26,7 +26,7 @@ import { useCaseReadReceipt } from "../hooks/useCaseReadReceipt";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
 import { useMe } from "../contexts/MeContext";
-import { listCustomers, type Customer } from "../api/settingsCustomers";
+import { listCustomerScopes, type CustomerScopeOption as Customer } from "../api/settingsCustomers";
 import { applyCaseWorkbookTemplate, type WorkbookInstance } from "../api/caseDetail";
 import { listWorkbookTemplates, type WorkbookTemplate } from "../api/settingsWorkbooks";
 import { listClassifications, listSeverities, type ClassificationItem, type SeverityItem } from "../api/dataModels";
@@ -144,7 +144,7 @@ export default function TicketDetail() {
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   useEffect(() => {
-    listCustomers({ include_inactive: false }).then((r) => setCustomers(r.results ?? [])).catch(() => setCustomers([]));
+    listCustomerScopes().then(setCustomers).catch(() => setCustomers([]));
   }, []);
 
   const descFocusedRef = useRef(false);

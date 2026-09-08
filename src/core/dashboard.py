@@ -1,4 +1,5 @@
 from datetime import timedelta, date, datetime, time
+from uuid import UUID
 
 from django.db.models import Count, Min
 from django.utils import timezone
@@ -10,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from .models import Alert, Customer, DashboardPreference, Case, Hunt
+from .models import Alert, Customer, CustomerSubgroup, DashboardPreference, Case, Hunt
 from .rbac import get_accessible_customer_ids, user_has_perm
 from .sla import WorkingCalendar, alert_snapshot, snapshot_deadline
 
@@ -31,6 +32,8 @@ DEFAULT_WIDGETS = [
     "cases_by_severity_period",
     "cases_by_classification_period",
     "cases_by_outcome_period",
+    "alerts_by_subgroup_period",
+    "cases_by_subgroup_period",
     "open_cases_by_customer",
     "open_alerts_by_customer",
     "open_hunts_by_customer",
@@ -60,6 +63,8 @@ AVAILABLE_WIDGETS = [
     {"id": "cases_by_severity_period", "label": "Cases by severity", "kind": "chart"},
     {"id": "cases_by_classification_period", "label": "Cases by classification", "kind": "chart"},
     {"id": "cases_by_outcome_period", "label": "Cases by outcome", "kind": "chart"},
+    {"id": "alerts_by_subgroup_period", "label": "Alerts by subgroup", "kind": "chart"},
+    {"id": "cases_by_subgroup_period", "label": "Cases by subgroup", "kind": "chart"},
     {"id": "open_cases_by_customer", "label": "Open cases by customer", "kind": "chart"},
     {"id": "open_alerts_by_customer", "label": "Open alerts by customer", "kind": "chart"},
     {"id": "open_hunts_by_customer", "label": "Open hunts by customer", "kind": "chart"},
@@ -442,6 +447,21 @@ def _rate_payload(false_positive_count: int, true_positive_count: int, qualified
     }
 
 
+def _subgroup_rows(queryset, customer_id, subgroup_ids):
+    queryset = queryset.filter(subgroups__id__in=subgroup_ids) if subgroup_ids else queryset.filter(subgroups__isnull=False)
+    rows = queryset.values("subgroups__id", "subgroups__name", "customer__name").annotate(
+        value=Count("id", distinct=True)
+    ).order_by("-value", "customer__name", "subgroups__name", "subgroups__id")
+    return [
+        {
+            "key": str(row["subgroups__id"]),
+            "label": row["subgroups__name"] if customer_id else f'{row["customer__name"]} — {row["subgroups__name"]}',
+            "value": row["value"],
+        }
+        for row in rows
+    ]
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def dashboard(request):
@@ -456,6 +476,21 @@ def dashboard(request):
     allowed_case_customers = scoped["allowed_case_customers"]
     allowed_alert_customers = scoped["allowed_alert_customers"]
     allowed_hunt_customers = scoped["allowed_hunt_customers"]
+
+    subgroup_ids = request.query_params.getlist("subgroups")
+    if subgroup_ids:
+        try:
+            subgroup_ids = list({str(UUID(value)) for value in subgroup_ids})
+            selected_customer = UUID(customer_id) if customer_id else None
+        except (ValueError, TypeError):
+            raise ValidationError({"subgroups": "Expected subgroup UUIDs and a customer UUID."})
+        if selected_customer is None or CustomerSubgroup.objects.filter(
+            pk__in=subgroup_ids, customer_id=selected_customer
+        ).count() != len(subgroup_ids):
+            raise ValidationError({"subgroups": "Every subgroup must belong to the selected customer."})
+        events = events.filter(pk__in=Case.objects.filter(subgroups__id__in=subgroup_ids).values("pk"))
+        alerts = alerts.filter(pk__in=Alert.objects.filter(subgroups__id__in=subgroup_ids).values("pk"))
+        hunts = hunts.none()
 
     scope = _resolve_period(request, events, alerts, hunts)
     start = scope["start"]
@@ -658,6 +693,7 @@ def dashboard(request):
         {
             "scope": {
                 "customer": customer_id,
+                "subgroups": subgroup_ids,
                 "period": scope["period"],
                 "date_from": scope["date_from"],
                 "date_to": scope["date_to"],
@@ -689,6 +725,8 @@ def dashboard(request):
                 "cases_by_severity_period": _rows_from_qs(cases_by_sev_period_qs, "severity"),
                 "cases_by_classification_period": _rows_from_qs(cases_by_classification_period_qs, "classification"),
                 "cases_by_outcome_period": _rows_from_qs(cases_by_outcome_period_qs, "outcome"),
+                "alerts_by_subgroup_period": _subgroup_rows(alerts_created_period, customer_id, subgroup_ids),
+                "cases_by_subgroup_period": _subgroup_rows(events_created_period, customer_id, subgroup_ids),
                 "open_cases_by_customer": _rows_from_qs(open_cases_by_customer_qs, "customer_id", "customer__name"),
                 "open_alerts_by_customer": _rows_from_qs(open_alerts_by_customer_qs, "customer_id", "customer__name"),
                 "open_hunts_by_customer": _rows_from_qs(open_hunts_by_customer_qs, "customer_id", "customer__name"),
