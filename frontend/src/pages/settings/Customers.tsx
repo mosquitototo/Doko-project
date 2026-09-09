@@ -567,8 +567,8 @@ export default function SettingsCustomers() {
             <div className="min-w-[980px]">
               <div className="grid grid-cols-12 gap-3 border-b border-border bg-background/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 <div className="col-span-2">Name</div>
-                <div className="col-span-1">Subgroups</div>
-                <div className="col-span-4">SLA</div>
+                <div className="col-span-2">Subgroups</div>
+                <div className="col-span-3">SLA</div>
                 <div className="col-span-3">ID</div>
                 <div className="col-span-1">Status</div>
                 <div className="col-span-1 text-right">Actions</div>
@@ -598,9 +598,9 @@ export default function SettingsCustomers() {
                       </button>
                     </div>
 
-                    <div className="col-span-1"><StatPill>{c.subgroups?.length ?? 0}</StatPill></div>
+                    <div className="col-span-2"><StatPill>{c.subgroups?.length ?? 0}</StatPill></div>
 
-                    <div className="col-span-4 min-w-0">
+                    <div className="col-span-3 min-w-0">
                       <div
                         className="line-clamp-2 whitespace-pre-wrap text-sm text-muted-foreground"
                         title={c.sla}

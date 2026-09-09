@@ -16,6 +16,7 @@ export type AlertListItem = {
   owner?: number | null;
   owner_id?: number | null;
   owner_username?: string | null;
+  owner_avatar_url?: string | null;
   case_number?: number | null;
   sla_due_at?: string | null;
   sla_state?: "none" | "ok" | "overdue" | "completed" | string | null;

@@ -4,6 +4,7 @@ import { ensureCsrf } from "./auth";
 export type SettingsUser = {
   id: number;
   username: string;
+  avatar_url?: string | null;
   email: string;
   is_active: boolean;
   is_admin: boolean;

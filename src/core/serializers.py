@@ -234,6 +234,7 @@ class AlertSerializer(CustomerSubgroupAssignmentMixin, serializers.ModelSerializ
 
     owner_id = serializers.IntegerField(source="owner.id", read_only=True)
     owner_username = serializers.CharField(source="owner.username", read_only=True)
+    owner_avatar_url = serializers.ImageField(source="owner.profile.avatar", read_only=True, default=None)
     owner = serializers.PrimaryKeyRelatedField(queryset=User.objects.all(), required=False, allow_null=True)
     sla_due_at = serializers.SerializerMethodField()
     sla_state = serializers.SerializerMethodField()
@@ -263,6 +264,7 @@ class AlertSerializer(CustomerSubgroupAssignmentMixin, serializers.ModelSerializ
             "owner",
             "owner_id",
             "owner_username",
+            "owner_avatar_url",
             "sla_due_at",
             "sla_state",
             "sla_rule",
@@ -406,6 +408,7 @@ class CaseListSerializer(serializers.ModelSerializer):
         source="owner", queryset=User.objects.all(), write_only=True, required=False
     )
     owner_username = serializers.CharField(source="owner.username", read_only=True)
+    owner_avatar_url = serializers.ImageField(source="owner.profile.avatar", read_only=True, default=None)
     owner_id_read = serializers.IntegerField(source="owner.id", read_only=True)
     customer_id = serializers.UUIDField(source="customer.id", read_only=True)
     customer_name = serializers.CharField(source="customer.name", read_only=True)
@@ -439,6 +442,7 @@ class CaseListSerializer(serializers.ModelSerializer):
             "classification",
             "severity",
             "owner_username",
+            "owner_avatar_url",
             "owner_id",
             "owner_id_read",
             "customer_name",

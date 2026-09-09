@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Card from "../../../components/ui/Card";
+import UserAvatar from "../../../components/ui/UserAvatar";
 import ConfirmDialog from "../../../components/ui/ConfirmDialog";
 import { useToast } from "../../../components/ui/toast";
 import {
@@ -450,7 +451,8 @@ export default function SettingsUsers() {
         ) : (
           <div className="overflow-x-auto">
             <div className="min-w-[980px]">
-              <div className="grid grid-cols-12 gap-3 border-b border-border bg-background/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              <div className="grid grid-cols-[44px_repeat(12,minmax(0,1fr))] gap-3 border-b border-border bg-background/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                <div aria-hidden="true" />
                 <div className="col-span-3">Username</div>
                 <div className="col-span-4">Email</div>
                 <div className="col-span-1">Status</div>
@@ -462,8 +464,9 @@ export default function SettingsUsers() {
                 {visible.map((u) => (
                   <div
                     key={u.id}
-                    className="grid grid-cols-12 items-center gap-3 px-5 py-4 transition hover:bg-accent/30"
+                    className="grid grid-cols-[44px_repeat(12,minmax(0,1fr))] items-center gap-3 px-5 py-4 transition hover:bg-accent/30"
                   >
+                    <UserAvatar src={u.avatar_url} name={u.username} size="sidebar" />
                     <div className="col-span-3 min-w-0">
                       <div
                         className="truncate text-sm font-medium text-foreground"

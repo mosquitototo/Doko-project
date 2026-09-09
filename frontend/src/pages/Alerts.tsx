@@ -16,6 +16,7 @@ import AlertMergeDialog from "../components/ui/AlertMergeDialog";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { useMe } from "../contexts/MeContext";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
+import UserAvatar from "../components/ui/UserAvatar";
 import {
   listSeverities,
   listClassifications,
@@ -1350,14 +1351,10 @@ export default function Alerts() {
                           </div>
 
                           <div className="min-w-0 text-xs text-muted-foreground">
-                            <div
-                              className="truncate"
-                              title={a.owner_username || ""}
-                            >
-                              {a.owner_username ||
-                                ownerLabelMap.get(String(a.owner_id ?? a.owner ?? "")) ||
-                                "—"}
-                            </div>
+                            <UserAvatar
+                              src={a.owner_avatar_url}
+                              name={a.owner_username || ownerLabelMap.get(String(a.owner_id ?? a.owner ?? ""))}
+                            />
                           </div>
 
                           <div>
@@ -1380,6 +1377,7 @@ export default function Alerts() {
                                               ...x,
                                               owner_id: me.id,
                                               owner_username: me.username,
+                                              owner_avatar_url: me.avatar_url,
                                             }
                                           : x
                                       )

@@ -16,8 +16,8 @@ from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from .models import AuditLog, InstanceSyslogSettings
-from .services_syslog import (
+from core.models import AuditLog, InstanceSyslogSettings
+from core.services_syslog import (
     build_audit_event,
     build_syslog_message,
     send_message_to_syslog,

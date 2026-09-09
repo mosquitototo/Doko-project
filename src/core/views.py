@@ -859,7 +859,7 @@ class AlertListCreateView(generics.ListCreateAPIView):
         qs = (
             Alert.objects
             .filter(is_deleted=False)
-            .select_related("customer", "owner", "case")
+            .select_related("customer", "owner__profile", "case")
             .prefetch_related("subgroups")
         )
 
@@ -1864,7 +1864,7 @@ class CaseListCreateView(generics.ListCreateAPIView):
     
     def get_queryset(self):
         user = self.request.user
-        qs = Case.objects.filter(is_deleted=False)
+        qs = Case.objects.filter(is_deleted=False).select_related("owner__profile")
 
         latest_comment_created_at = Comment.objects.filter(
             case_id=OuterRef("pk")
@@ -4056,9 +4056,20 @@ class UpdateAvatarView(APIView):
         except (UnidentifiedImageError, OSError, ValueError):
             return Response({"detail": "Invalid image file."}, status=status.HTTP_400_BAD_REQUEST)
 
-        profile, _ = UserProfile.objects.get_or_create(user=request.user)
-        profile.avatar = file
-        profile.save()
+        with transaction.atomic():
+            profile, _ = UserProfile.objects.select_for_update().get_or_create(user=request.user)
+            old_name = profile.avatar.name
+            storage = profile.avatar.storage
+            profile.avatar = file
+            profile.save(update_fields=["avatar"])
+            request.user.profile = profile
+
+            if old_name and old_name != profile.avatar.name:
+                def delete_replaced_avatar():
+                    if not UserProfile.objects.filter(avatar=old_name).exists():
+                        storage.delete(old_name)
+
+                transaction.on_commit(delete_replaced_avatar, robust=True)
 
         audit_event(
             request,

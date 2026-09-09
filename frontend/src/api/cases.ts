@@ -18,6 +18,7 @@ export type CaseListItem = {
 
   owner_id_read?: number | null;
   owner_username?: string | null;
+  owner_avatar_url?: string | null;
   customer?: string | null;
   customer_name?: string | null;
   subgroups?: string[];

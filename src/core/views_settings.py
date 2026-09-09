@@ -53,7 +53,7 @@ from .models import (
     WorkbookTemplate,
 )
 from .permissions import HasPermissionCode, CanManageInstanceSettings
-from .serializers import AuditLogSerializer
+from .serializers import AuditLogSerializer, MeSerializer
 from .serializers_chat import (AIProviderSerializer, SOARProviderSerializer, InvestigationTemplateSerializer,)
 from .rbac import user_has_perm, is_doko_admin
 from .audit import audit_event
@@ -312,7 +312,7 @@ class SettingsUserListCreateView(generics.ListCreateAPIView):
         super().initial(request, *args, **kwargs)
 
     def get_queryset(self):
-        qs = User.objects.all().order_by("username")
+        qs = User.objects.select_related("profile").order_by("username")
         q = self.request.query_params.get("q", "").strip()
         include_inactive = self.request.query_params.get("include_inactive") == "1"
 
@@ -326,12 +326,14 @@ class SettingsUserListCreateView(generics.ListCreateAPIView):
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()
+        avatar_serializer = MeSerializer(context={"request": request})
         data = [{
             "id": u.id,
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_admin": is_doko_admin(u),
+            "is_admin": bool(u.is_staff),
+            "avatar_url": avatar_serializer.get_avatar_url(u),
         } for u in qs[:500]]
         return Response({"results": data, "count": qs.count()})
 
@@ -398,21 +400,24 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_admin": is_doko_admin(u),
+            "is_admin": bool(u.is_staff),
             "role_ids": role_ids,
         })
 
+    @transaction.atomic
     def update(self, request, *args, **kwargs):
-        u = self.get_object()
+        u = User.objects.select_for_update().get(pk=self.get_object().pk)
 
-        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can modify an administrator.")
+        if u.is_staff and not u.is_active and not is_doko_admin(request.user):
+            raise PermissionDenied("Only administrators can modify a disabled administrator.")
 
         before = {
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_admin": is_doko_admin(u),
+            "is_admin": bool(u.is_staff),
             "role_ids": list(UserRole.objects.filter(user=u).values_list("role_id", flat=True)),
         }
 
@@ -450,8 +455,6 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
                 raise PermissionDenied("You cannot disable yourself.")
             u.is_active = next_is_active
 
-        u.save()
-
         if role_ids is not None:
             if u.id == request.user.id:
                 raise PermissionDenied("You cannot change your own roles.")
@@ -463,6 +466,11 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             if len(valid_role_ids) != len(set(role_ids)):
                 return Response({"error": "unknown role id in role_ids"}, status=400)
 
+        u.save()
+        if not u.is_active:
+            AuthToken.objects.filter(user=u).delete()
+
+        if role_ids is not None:
             UserRole.objects.filter(user=u).exclude(role_id__in=valid_role_ids).delete()
             existing = set(UserRole.objects.filter(user=u).values_list("role_id", flat=True))
             to_add = valid_role_ids - existing
@@ -473,7 +481,7 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_admin": is_doko_admin(u),
+            "is_admin": bool(u.is_staff),
             "role_ids": final_role_ids,
         }
 
@@ -495,7 +503,7 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             "username": u.username,
             "email": u.email,
             "is_active": u.is_active,
-            "is_admin": is_doko_admin(u),
+            "is_admin": bool(u.is_staff),
             "role_ids": final_role_ids,
         })
 
@@ -506,7 +514,7 @@ class SettingsUserResetPasswordView(APIView):
 
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
-        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can reset admin passwords.")
         
         new_password = request.data.get("password") or ""
@@ -540,7 +548,7 @@ class SettingsUserPasswordResetLinkView(APIView):
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
 
-        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can generate admin reset links.")
 
         if not u.is_active:
@@ -586,12 +594,12 @@ class SettingsUserDeleteView(APIView):
         if u.id == request.user.id:
             return Response({"error": "cannot delete yourself"}, status=400)
         
-        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can delete administrators.")
 
         target_id = u.id
         target_username = u.username
-        was_admin = is_doko_admin(u)
+        was_admin = bool(u.is_staff)
         u.delete()
 
         audit_event(
@@ -617,18 +625,22 @@ class SettingsUserApiTokenListCreateView(APIView):
     def get(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
 
-        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can view administrator tokens.")
 
         tokens = AuthToken.objects.filter(user=u).order_by("-created")
         data = SettingsUserApiTokenSerializer(tokens, many=True).data
         return Response(data, status=status.HTTP_200_OK)
 
+    @transaction.atomic
     def post(self, request, pk: int):
-        u = generics.get_object_or_404(User, pk=pk)
+        u = generics.get_object_or_404(User.objects.select_for_update(), pk=pk)
 
         if not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can issue tokens for other users.")
+
+        if not u.is_active:
+            return Response({"error": "user is inactive"}, status=400)
 
         if _api_token_limit_reached(u):
             return _token_limit_response()
@@ -676,7 +688,7 @@ class SettingsUserApiTokenRevokeView(APIView):
     def post(self, request, pk: int, token_key: str):
         u = generics.get_object_or_404(User, pk=pk)
 
-        if is_doko_admin(u) and not user_has_perm(request.user, "settings.instance.manage"):
+        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can revoke administrator tokens.")
 
         token_instance = AuthToken.objects.filter(user=u, token_key=token_key).first()

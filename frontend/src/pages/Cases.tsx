@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Card from "../components/ui/Card";
+import UserAvatar from "../components/ui/UserAvatar";
 import StatusBadge from "../components/ui/StatusBadge";
 import {
   fetchTickets,
@@ -1053,12 +1054,7 @@ export default function Tickets() {
                         </div>
 
                         <div className="min-w-0 text-xs text-muted-foreground">
-                          <div
-                            className="truncate"
-                            title={t.owner_username || ""}
-                          >
-                            {t.owner_username || "—"}
-                          </div>
+                          <UserAvatar src={t.owner_avatar_url} name={t.owner_username} />
                         </div>
 
                         <div className="text-right text-[11px] text-muted-foreground">

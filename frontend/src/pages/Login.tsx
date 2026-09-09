@@ -115,7 +115,12 @@ export default function Login() {
                 <img
                   src="/Doko_logo_small.png"
                   alt="Doko logo"
-                  className="max-h-full max-w-full object-contain"
+                  className="hidden max-h-full max-w-full object-contain dark:block"
+                />
+                <img
+                  src="/Doko_logo_small_slate.png"
+                  alt="Doko logo"
+                  className="max-h-full max-w-full object-contain dark:hidden"
                 />
               </div>
             </Card>

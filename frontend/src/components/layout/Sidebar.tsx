@@ -221,7 +221,12 @@ export default function Sidebar({
             <img
               src="/Doko_logo_small.png"
               alt="Logo"
-              className="max-h-full max-w-full object-contain"
+              className="hidden max-h-full max-w-full object-contain dark:block"
+            />
+            <img
+              src="/Doko_logo_small_slate.png"
+              alt="Logo"
+              className="max-h-full max-w-full object-contain dark:hidden"
             />
           </div>
 
@@ -229,7 +234,7 @@ export default function Sidebar({
             <div className="text-lg font-semibold tracking-tight text-foreground">
               Doko
             </div>
-            <div className="text-xs text-muted-foreground">Investigation workspace</div>
+            <div className="text-xs text-muted-foreground">SOC case manager</div>
           </div>
         </div>
       </div>

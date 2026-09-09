@@ -10,6 +10,7 @@ from django.contrib.auth import (
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.contrib.sessions.models import Session
+from django.db import transaction
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -320,11 +321,16 @@ class ApiTokenListCreateView(APIView):
 
         return Response(data, status=status.HTTP_200_OK)
 
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
         t0 = time.time()
         ip, ua, path, method = get_request_meta(request)
 
-        if _api_token_limit_reached(request.user):
+        token_user = User.objects.select_for_update().get(pk=request.user.pk)
+        if not token_user.is_active:
+            return Response({"detail": "User inactive."}, status=status.HTTP_403_FORBIDDEN)
+
+        if _api_token_limit_reached(token_user):
             return _token_limit_response()
 
         expiry, never_expire, error_response = _parse_token_expiry_payload(request.data or {})
@@ -332,7 +338,7 @@ class ApiTokenListCreateView(APIView):
         if error_response is not None:
             return error_response
 
-        token_instance, raw_token = AuthToken.objects.create(user=request.user)
+        token_instance, raw_token = AuthToken.objects.create(user=token_user)
 
         if never_expire or expiry is not None:
             token_instance.expiry = None if never_expire else expiry
