@@ -3,17 +3,22 @@ from datetime import datetime
 from collections.abc import Iterable
 from jinja2.sandbox import SandboxedEnvironment
 from jinja2 import StrictUndefined
+from markupsafe import Markup
 from django.utils.html import escape
 from django.utils.timezone import localtime
 from django.db.models import Model, QuerySet
 from django.db.models.manager import BaseManager
 from urllib.parse import urlparse
-from .models import Alert, AlertComment, Case, Comment, Hunt, HuntJournalEntry, Task, TaskComment
+from .models import Alert, AlertComment, Case, CaseExchange, Comment, Hunt, HuntJournalEntry, Task, TaskComment
 
 
 class MarkdownReportText(str):
     def __html__(self):
         return escape(str(self))
+
+
+class ExchangeReportText(Markup):
+    pass
 
 
 MARKDOWN_REPORT_FIELDS = {
@@ -44,7 +49,7 @@ def _format_date(value):
 def _nl2br(value):
     if value is None:
         return ""
-    s = escape(str(value))
+    s = str(value) if isinstance(value, ExchangeReportText) else escape(str(value))
     return s.replace("\n", "<br>\n")
 
 
@@ -95,6 +100,8 @@ class TemplateObjectProxy:
             return _normalize_value(value)
         if callable(value):
             raise AttributeError(name)
+        if isinstance(self._obj, CaseExchange) and name == "body" and isinstance(value, str):
+            return ExchangeReportText(escape(value))
         if name in MARKDOWN_REPORT_FIELDS.get(type(self._obj), set()) and isinstance(value, str):
             return MarkdownReportText(value)
         return _normalize_value(value)

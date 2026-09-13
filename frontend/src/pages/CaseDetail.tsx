@@ -632,6 +632,7 @@ export default function TicketDetail() {
       setExchangeCreateOpen(false);
       setReplyTarget(null);
       setExchangeDraft({ direction: "inbound", channel: "email", sender: "", to: "", cc: "", bcc: "", subject: "", body: "", message_id: "", references: "" });
+      if (replyModalOpen) closeReplyModal();
       await refreshExchanges();
     } catch (e: any) {
       push({ kind: "error", title: "Send failed", message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network") });

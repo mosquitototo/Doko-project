@@ -749,308 +749,83 @@ export default function SettingsReports() {
 const defaultTemplateCss = `
 @page {
   size: A4;
-  margin: 16mm 14mm;
+  margin: 16mm 14mm 19mm;
+  @bottom-left { content: "Doko / Case report"; font-family: Arial, sans-serif; font-size: 8px; color: #64748b; }
+  @bottom-right { content: counter(page) " / " counter(pages); font-family: Arial, sans-serif; font-size: 8px; color: #64748b; }
 }
 
-:root {
-  --bg: #f8fafc;
-  --surface: #ffffff;
-  --surface-soft: #f8fafc;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --text: #0f172a;
-  --muted: #475569;
-  --muted-soft: #64748b;
-  --primary: #334155;
-  --accent: #3b82f6;
-  --accent-soft: #dbeafe;
-}
-
-body {
-  font-family: Inter, Arial, sans-serif;
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text);
-  background: #fff;
-}
-
-.report {
-  display: block;
-}
-
-.hero {
-  display: table;
-  width: 100%;
-  margin-bottom: 18px;
-  padding: 18px 20px;
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
-}
-
-.hero-left,
-.hero-right {
-  display: table-cell;
-  vertical-align: top;
-}
-
-.hero-right {
-  width: 220px;
-  text-align: right;
-}
-
-.eyebrow {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .16em;
-  text-transform: uppercase;
-  color: var(--muted-soft);
-  margin-bottom: 6px;
-}
-
-h1 {
-  margin: 0;
-  font-size: 24px;
-  line-height: 1.15;
-  color: var(--text);
-}
-
-.hero-subtitle {
-  margin-top: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.outcome-card {
-  display: inline-block;
-  min-width: 180px;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
-  text-align: left;
-}
-
-.outcome-card .label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .12em;
-  color: var(--muted-soft);
-  margin-bottom: 4px;
-}
-
-.outcome-card .value {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--primary);
-}
-
-.grid-meta {
-  margin: 18px 0 24px;
-  font-size: 0;
-}
-
-.meta-card {
-  display: inline-block;
-  vertical-align: top;
-  width: calc(25% - 9px);
-  margin-right: 12px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface-soft);
-  box-sizing: border-box;
-}
-
-.meta-card:nth-child(4n) {
-  margin-right: 0;
-}
-
-.meta-label {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .12em;
-  color: var(--muted-soft);
-  margin-bottom: 6px;
-}
-
-.meta-value {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-section {
-  margin-top: 24px;
-}
-
-h2 {
-  margin: 0 0 10px;
-  font-size: 15px;
-  line-height: 1.2;
-  color: var(--text);
-}
-
-.surface {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: var(--surface);
-  padding: 14px 16px;
-}
-
-.prose-block p:first-child {
-  margin-top: 0;
-}
-
-.prose-block p:last-child {
-  margin-bottom: 0;
-}
-
-.prose-block ul,
-.prose-block ol {
-  padding-left: 20px;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-
-thead th {
-  text-align: left;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: var(--muted-soft);
-  padding: 8px 6px;
-  border-bottom: 1px solid var(--border-strong);
-}
-
-tbody td {
-  padding: 9px 6px;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-  font-size: 11.5px;
-}
-
-tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.center {
-  text-align: center;
-}
-
-.mono {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-}
-
-.wrap {
-  word-break: break-word;
-}
-
-.json-block {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.footer {
-  margin-top: 30px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  text-align: right;
-  color: var(--muted-soft);
-  font-size: 10px;
-}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Arial, sans-serif; font-size: 11px; line-height: 1.55; color: #17243a; background: #fff; }
+.report { overflow-wrap: anywhere; }
+.hero { padding: 10px 14px; margin-bottom: 14px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; text-align: center; }
+.hero .case-title { margin: 5px 0 6px; font-size: 16px; line-height: 1.3; font-weight: normal; }
+.hero .eyebrow { margin-bottom: 3px; }
+.hero-subtitle { color: #64748b; }
+.eyebrow { font-size: 9px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; color: #64748b; margin-bottom: 7px; }
+h1 { margin: 0; font-size: 18px; line-height: 1.2; letter-spacing: -.025em; }
+.hero-subtitle { margin-top: 3px; font-size: 10px; }
+.grid-meta { display: table; table-layout: fixed; width: 100%; border-spacing: 6px 0; margin: 0 0 6px; }
+.meta-row { display: table-row; }
+.meta-card { display: table-cell; padding: 12px; vertical-align: top; border: 1px solid #e2e8f0; border-radius: 7px; background: #f5f7fa; }
+.meta-label { font-size: 8px; font-weight: bold; letter-spacing: .08em; text-transform: uppercase; color: #64748b; margin-bottom: 6px; }
+.meta-value { font-size: 11px; font-weight: bold; line-height: 1.5; }
+.case-reference { margin: 7px 6px; font-size: 9px; color: #64748b; }
+section { margin-top: 24px; }
+h2 { margin: 0 0 12px; padding-bottom: 7px; border-bottom: 1px solid #dbe3eb; font-size: 14px; line-height: 1.3; break-after: avoid; }
+h3 { font-size: 12px; line-height: 1.4; margin: 0 0 6px; }
+.surface { padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 8px; }
+.raw-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prose-block { padding: 14px; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+thead { display: table-header-group; }
+thead th { text-align: left; padding: 9px 6px; background: #f5f7fa; border-bottom: 1px solid #dbe3eb; font-size: 8px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; }
+tbody td { padding: 9px 6px; border-bottom: 1px solid #e2e8f0; vertical-align: top; font-size: 10px; }
+tbody tr:last-child td { border-bottom: 0; }
+tr, .grid-meta { break-inside: avoid; }
+.center { text-align: center; }
+.mono, .json-block { font-family: "Liberation Mono", Consolas, monospace; }
+.wrap, td, th, .meta-value { overflow-wrap: anywhere; }
+.json-block { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 9px; }
+.exchange { border-left: 3px solid #cbd5e1; padding: 0 0 0 14px; margin: 0 0 20px; }
+.exchange-heading { padding: 10px 12px; background: #f5f7fa; border-radius: 6px; break-inside: avoid; break-after: avoid; }
+.exchange-meta { font-size: 9px; color: #64748b; }
+.exchange-body { padding: 12px 0 0; font-size: 10px; }
+.footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid #e2e8f0; color: #64748b; font-size: 9px; text-align: right; }
 `;
 
 const defaultTemplateHtml = `
 <div class="report">
 
   <header class="hero">
-    <div class="hero-left">
-      <div class="eyebrow">Doko Case Report</div>
-      <h1>{{ case.title }}</h1>
-      <div class="hero-subtitle">
-        Full case report for <span class="mono">{{ case.id }}</span>
-      </div>
-    </div>
-
-    <div class="hero-right">
-      <div class="outcome-card">
-        <div class="label">Outcome</div>
-        <div class="value">{{ case.outcome or "-" }}</div>
-      </div>
-    </div>
+    <h1>Doko Case Report</h1>
+    <div class="case-title">{{ case.title }}</div>
+    <div class="eyebrow">Security incident / {{ case.case_number or case.id }}</div>
+    <div class="hero-subtitle">Generated {{ generated_at|format_date }}{% if generated_by %} by {{ generated_by.username }}{% endif %}</div>
   </header>
 
-  <section class="grid-meta">
-    <div class="meta-card">
-      <div class="meta-label">Status</div>
-      <div class="meta-value">{{ case.status or "-" }}</div>
+  <div class="grid-meta">
+    <div class="meta-row">
+      {% for label, value in [("Status", case.status), ("Severity", case.severity), ("Classification", case.classification), ("Outcome", case.outcome)] %}
+      <div class="meta-card"><div class="meta-label">{{ label }}</div><div class="meta-value">{{ (value or "-")|replace("_", " ") }}</div></div>
+      {% endfor %}
     </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Severity</div>
-      <div class="meta-value">{{ case.severity or "-" }}</div>
+  </div>
+  <div class="grid-meta">
+    <div class="meta-row">
+      <div class="meta-card"><div class="meta-label">Customer</div><div class="meta-value">{{ case.customer.name if case.customer else "-" }}</div></div>
+      <div class="meta-card"><div class="meta-label">Owner</div><div class="meta-value">{{ case.owner.username if case.owner else "Unassigned" }}</div></div>
+      <div class="meta-card"><div class="meta-label">Created</div><div class="meta-value">{{ case.created_at|format_date or "-" }}</div></div>
+      <div class="meta-card"><div class="meta-label">Last update</div><div class="meta-value">{{ case.updated_at|format_date or "-" }}</div></div>
     </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Classification</div>
-      <div class="meta-value">{{ case.classification or "-" }}</div>
-    </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Owner</div>
-      <div class="meta-value">
-        {% if case.owner %}
-          {{ case.owner.username }}
-        {% else %}
-          -
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Customer</div>
-      <div class="meta-value">
-        {% if case.customer %}
-          {{ case.customer.name }}
-        {% else %}
-          -
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Created</div>
-      <div class="meta-value">{{ case.created_at|format_date }}</div>
-    </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Last update</div>
-      <div class="meta-value">{{ case.updated_at|format_date }}</div>
-    </div>
-
-    <div class="meta-card">
-      <div class="meta-label">Case UUID</div>
-      <div class="meta-value mono">{{ case.id }}</div>
-    </div>
-  </section>
+  </div>
+  <div class="case-reference">Case UUID <span class="mono">{{ case.id }}</span></div>
+  {% if case.subgroups %}
+  <div class="case-reference">Subgroups: {% for subgroup in case.subgroups %}{{ subgroup.name }}{% if not loop.last %}, {% endif %}{% endfor %}</div>
+  {% endif %}
 
   <section>
     <h2>Description</h2>
-    <div class="surface prose-block">
-      {{ case.description|safe }}
-    </div>
+    <div class="surface prose-block raw-text">{{ case.description or "No description provided." }}</div>
   </section>
 
 {% if case.iocs %}
@@ -1161,6 +936,25 @@ const defaultTemplateHtml = `
   </section>
   {% endif %}
 
+  {% if exchanges %}
+  <section>
+    <h2>Exchange</h2>
+    {% for message in exchanges %}
+    <article class="exchange">
+      <div class="exchange-heading">
+        <div class="eyebrow">{{ message.direction|replace("_", " ") }} / {{ message.channel }}</div>
+        <h3>{{ message.subject or "No subject" }}</h3>
+        <div class="exchange-meta">{{ message.created_at|format_date }}{% if message.sender %} · From: {{ message.sender }}{% endif %}</div>
+        {% if message.to %}<div class="exchange-meta">To: {{ message.to|join(", ") }}</div>{% endif %}
+        {% if message.cc %}<div class="exchange-meta">Cc: {{ message.cc|join(", ") }}</div>{% endif %}
+        {% if message.message_id %}<div class="exchange-meta mono">Message ID: {{ message.message_id }}</div>{% endif %}
+      </div>
+      <div class="raw-text exchange-body">{{ message.body or "No message body." }}</div>
+    </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+
   {% if params %}
   <section>
     <h2>Custom parameters</h2>
@@ -1182,6 +976,31 @@ const JINJA_FIELDS: Array<{
   example: string;
   description: string;
 }> = [
+  {
+    expr: "case.subgroups",
+    example: "{% for subgroup in case.subgroups %}{{ subgroup.name }} ({{ subgroup.id }}){% endfor %}",
+    description: "Subgroups explicitly assigned to this case; empty when none are assigned. Each subgroup also exposes description and contacts.",
+  },
+  {
+    expr: "exchanges",
+    example: '{% for message in exchanges %}<div style="white-space: pre-wrap">{{ message.body }}</div>{% endfor %}',
+    description: "Case exchanges in chronological order. Body is literal text: HTML tags are displayed, never rendered. Empty when there are no messages.",
+  },
+  {
+    expr: "message.subject / direction / channel / sender / to / cc / message_id / created_at",
+    example: "{{ message.subject or '-' }} | {{ message.direction }} | {{ message.created_at|format_date }}",
+    description: "Fields inside the exchanges loop. to and cc are lists: use |join(', '). Optional text fields may be empty.",
+  },
+  {
+    expr: "comments",
+    example: "{% for comment in comments %}{{ comment.author.username if comment.author else '-' }}: {{ comment.text }}{% endfor %}",
+    description: "Case comments in chronological order, with text, author and created_at. HTML in comment text is escaped.",
+  },
+  {
+    expr: "incident_timeline",
+    example: "{% for item in incident_timeline %}{{ item.occurred_at|format_date }}: {{ item.title }} - {{ item.details }}{% endfor %}",
+    description: "Incident timeline entries in chronological order, also exposing kind and source.",
+  },
   {
     expr: "case.id",
     example: "{{ case.id }}",
@@ -1239,9 +1058,9 @@ const JINJA_FIELDS: Array<{
   },
   {
     expr: "case.description",
-    example: "{{ case.description|safe }}",
+    example: '<div style="white-space: pre-wrap">{{ case.description }}</div>',
     description:
-      "Case description stored as HTML from the editor. Use |safe for report rendering. Variant: use |nl2br only for plain text content, not for TipTap HTML.",
+      "Case description stored as Markdown text. HTML is escaped by the report engine. Preserve line breaks with white-space: pre-wrap, or use |nl2br|safe.",
   },
 
   {

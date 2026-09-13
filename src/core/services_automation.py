@@ -1009,11 +1009,9 @@ def _create_exchange_from_source(
             raise ValueError("Unknown or inactive Exchange quickpart")
 
     body_template = quickpart.body if quickpart else action.get("body") or ""
-    body = sanitize_html(
-        _render_template_string(
-            body_template,
-            _runtime_variables(ctx),
-        )
+    body = _render_template_string(
+        body_template,
+        _runtime_variables(ctx),
     )
 
     if source:

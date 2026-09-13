@@ -68,16 +68,16 @@ type WidgetMeta = {
 };
 
 const PIE_COLORS = [
-  "#4f6fa5", // blue muted
-  "#b04a4a", // red muted
-  "#4f8a6b", // green muted
-  "#b38a3e", // amber muted
-  "#7a5ea8", // purple muted
-  "#3f8f94", // cyan muted
-  "#a86a3a", // orange muted
-  "#6f9a3c", // lime muted
-  "#a85c7c", // pink muted
-  "#5a66a8", // indigo muted
+  "#4f6fa5",
+  "#b04a4a",
+  "#4f8a6b",
+  "#b38a3e",
+  "#7a5ea8",
+  "#3f8f94",
+  "#a86a3a",
+  "#6f9a3c",
+  "#a85c7c",
+  "#5a66a8",
 ];
 
 const PERIOD_OPTIONS = [

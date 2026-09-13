@@ -8,7 +8,7 @@ import { CancelButton, ClearButton, DeleteButton, DetailButton, NewGenButton, Re
 import type { CaseExchange } from "../../../api/exchanges";
 import type { CaseExchangeQuickpart } from "../../../api/settingsCaseExchange";
 import { deleteCaseExchange, updateCaseExchange } from "../../../api/exchanges";
-import { formatDate, isRichTextEmpty, parseCsv } from "./utils";
+import { formatDate, parseCsv } from "./utils";
 import { createPortal } from "react-dom";
 
 type Draft = {
@@ -280,7 +280,7 @@ export default function CaseExchangesTab(props: Props) {
                                 </div>
 
                                 <div className={["mt-4 rounded-2xl border px-3 py-3 text-sm break-words", isOutbound ? "border-slate-200 bg-white/70 text-slate-900 dark:border-white/10 dark:bg-white/10 dark:text-white" : "border-border bg-background text-foreground"].join(" ")}>
-                                  {isRichTextEmpty(String(x.body || "")) ? (
+                                  {!String(x.body || "").trim() ? (
                                     <span className={isOutbound ? "text-slate-500 dark:text-white/60" : "text-muted-foreground"}>(empty)</span>
                                   ) : (
                                     <div className="min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">

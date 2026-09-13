@@ -2,7 +2,6 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.db import transaction
 
-from .html_sanitizer import sanitize_html
 from .rbac import get_accessible_customer_ids, user_has_perm
 from .sla import alert_snapshot, snapshot_deadline, validate_calendar
 
@@ -1315,6 +1314,7 @@ class CaseExchangeFollowupSerializer(serializers.ModelSerializer):
 
 
 class CaseExchangeSerializer(serializers.ModelSerializer):
+    body = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
     followup_config = CaseExchangeFollowupSerializer(read_only=True)
 
@@ -1341,11 +1341,8 @@ class CaseExchangeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "case", "created_by", "created_by_username", "created_at"]
 
-    def validate_body(self, value):
-        return sanitize_html(value)
-
-
 class CaseExchangeCreateSerializer(serializers.ModelSerializer):
+    body = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     class Meta:
         model = CaseExchange
         fields = [
@@ -1361,9 +1358,6 @@ class CaseExchangeCreateSerializer(serializers.ModelSerializer):
             "references",
             "raw",
         ]
-
-    def validate_body(self, value):
-        return sanitize_html(value)
 
     def validate_raw(self, value):
         if value in (None, ""):
@@ -1384,6 +1378,7 @@ class CaseExchangeCreateSerializer(serializers.ModelSerializer):
 
 
 class CaseExchangeReplyQuickpartSerializer(serializers.ModelSerializer):
+    body = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     class Meta:
         model = CaseExchangeReplyQuickpart
         fields = [
@@ -1403,9 +1398,6 @@ class CaseExchangeReplyQuickpartSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Name is required.")
         return v
         
-    def validate_body(self, value):
-        return sanitize_html(value)
-
 
 class TaskCaseLiteSerializer(serializers.ModelSerializer):
     case_number = serializers.IntegerField(read_only=True)

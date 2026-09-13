@@ -1,15 +1,5 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
-import {
-  EditorContent,
-  useEditor,
-} from "@tiptap/react";
-import type { Level } from "@tiptap/extension-heading";
-
-import { buildTiptapExtensions } from "../../api/tiptapExtensions";
-
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { HighlightButton, CodeButton } from "../../components/ui/IconButton";
-
-
 
 type Props = {
   value: string;
@@ -19,97 +9,43 @@ type Props = {
   className?: string;
 };
 
-
 export type TiptapEditorHandle = {
   getHTML: () => string;
 };
 
-
 const PRESET_TEXT_COLORS = [
-  { value: "" },
-  { value: "#0f172a" },
-  { value: "#ef4444" },
-  { value: "#f97316" },
-  { value: "#eab308" },
-  { value: "#16a34a" },
-  { value: "#06b6d4" },
-  { value: "#2563eb" },
-  { value: "#7c3aed" },
-  { value: "#ec4899" },
-  { value: "#475569" },
+  { value: "" }, { value: "#0f172a" }, { value: "#ef4444" },
+  { value: "#f97316" }, { value: "#eab308" }, { value: "#16a34a" },
+  { value: "#06b6d4" }, { value: "#2563eb" }, { value: "#7c3aed" },
+  { value: "#ec4899" }, { value: "#475569" },
 ];
 
-
-function getHeadingValue(editor: NonNullable<ReturnType<typeof useEditor>>) {
-  const levels: Level[] = [1, 2, 3, 4, 5, 6];
-  const activeLevel = levels.find((level) =>
-    editor.isActive("heading", { level })
-  );
-
-  return activeLevel ? String(activeLevel) : "0";
+export function insertExchangeHtml(value: string, start: number, end: number, opening: string, closing = "") {
+  return {
+    value: value.slice(0, start) + opening + value.slice(start, end) + closing + value.slice(end),
+    start: start + opening.length,
+    end: end + opening.length,
+  };
 }
 
 const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor(props, ref) {
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const selection = useRef<{ start: number; end: number } | null>(null);
   const [colorMenuOpen, setColorMenuOpen] = useState(false);
   const [isEditorFocused, setIsEditorFocused] = useState(false);
-  const flushHtml = (editorInstance: NonNullable<ReturnType<typeof useEditor>>) => {
-    props.onChange(editorInstance.getHTML());
-  };
-  const editor = useEditor({
-    editable: !props.disabled,
-    immediatelyRender: false,
-    extensions: buildTiptapExtensions({
-      placeholder: props.placeholder ?? "",
-      securePaste: true,
-    }),
-    content: props.value || "",
-    onUpdate({ editor }) {
-      props.onChange(editor.getHTML());
-    },
-    onTransaction({ editor }) {
-      props.onChange(editor.getHTML());
-    },
-    onFocus() {
-      setIsEditorFocused(true);
-    },
-    onBlur({ editor, event }) {
-      flushHtml(editor);
 
-      const nextTarget = event.relatedTarget as Node | null;
+  useImperativeHandle(ref, () => ({ getHTML: () => props.value ?? "" }), [props.value]);
 
-      const root = (editor?.options.element as HTMLElement | null)?.closest(
-        "[data-tiptap-wrapper]"
-      ) as HTMLElement | null;
-
-      if (root && nextTarget && root.contains(nextTarget)) {
-        return;
-      }
-
-      setIsEditorFocused(false);
-      setColorMenuOpen(false);
-    },
-  });
-
-  useImperativeHandle(
-    ref,
-    () => ({
-      getHTML: () => editor?.getHTML() ?? props.value ?? "",
-    }),
-    [editor, props.value],
-  );
-
-  useEffect(() => {
-    if (!editor) return;
-
-    const currentHtml = editor.getHTML();
-    const nextHtml = props.value || "";
-
-    if (nextHtml !== currentHtml) {
-      editor.commands.setContent(nextHtml, { emitUpdate: false });
+  useLayoutEffect(() => {
+    const input = textarea.current;
+    if (!input) return;
+    input.style.height = "120px";
+    input.style.height = Math.max(120, input.scrollHeight) + "px";
+    if (selection.current) {
+      input.setSelectionRange(selection.current.start, selection.current.end);
+      selection.current = null;
     }
-
-    editor.setEditable(!props.disabled);
-  }, [editor, props.value, props.disabled]);
+  }, [props.value]);
 
   useEffect(() => {
     if (props.disabled) {
@@ -118,58 +54,51 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor
     }
   }, [props.disabled]);
 
-  if (!editor) {
-    return null;
+  function insert(opening: string, closing = "") {
+    const input = textarea.current;
+    if (!input || props.disabled) return;
+    const next = insertExchangeHtml(input.value, input.selectionStart, input.selectionEnd, opening, closing);
+    const replacement = opening + input.value.slice(input.selectionStart, input.selectionEnd) + closing;
+    input.focus();
+    if (document.execCommand("insertText", false, replacement)) {
+      props.onChange(input.value);
+      input.setSelectionRange(next.start, next.end);
+      return;
+    }
+    selection.current = next;
+    props.onChange(next.value);
   }
 
-  const btn = (active: boolean) =>
-    [
-      "inline-flex h-8 min-w-8 border-none items-center justify-center rounded-xl px-2 text-[11px] font-semibold transition-all duration-200",
-      "focus:outline-none focus:ring-2 focus:ring-blue-500/20",
-      props.disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95",
-      
-      active
-        ?
-          "bg-slate-900 text-white shadow-sm dark:bg-slate-100 dark:text-slate-900"
-        :
-          "bg-slate-200/40 text-slate-500 hover:bg-slate-200/80 hover:text-slate-900 dark:bg-slate-800/40 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-slate-100",
-    ].join(" ");
-
-  const getActiveTextColor = () => {
-    const active = PRESET_TEXT_COLORS.find(
-      (item) => item.value && editor.isActive("textStyle", { color: item.value })
-    );
-    return active?.value ?? "";
-  };
-
-  const showToolbar = isEditorFocused || colorMenuOpen;
+  const btn = [
+    "inline-flex h-8 min-w-8 border-none items-center justify-center rounded-xl px-2 text-[11px] font-semibold transition-all duration-200",
+    "focus:outline-none focus:ring-2 focus:ring-blue-500/20",
+    props.disabled ? "cursor-not-allowed opacity-40" : "cursor-pointer active:scale-95",
+    "bg-slate-200/40 text-slate-500 hover:bg-slate-200/80 hover:text-slate-900 dark:bg-slate-800/40 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-slate-100",
+  ].join(" ");
 
   return (
     <div
       data-tiptap-wrapper
       className="overflow-hidden rounded-2xl border-none"
+      onBlur={(event) => {
+        if (event.relatedTarget && event.currentTarget.contains(event.relatedTarget as Node)) return;
+        setIsEditorFocused(false);
+        setColorMenuOpen(false);
+      }}
     >
-      {showToolbar ? (
+      {isEditorFocused || colorMenuOpen ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-3 py-2">
           <select
+            aria-label="Heading"
             className="h-8 rounded-xl bg-background px-2 text-xs text-foreground outline-none transition hover:bg-accent focus:ring-2 focus:ring-ring/20 disabled:cursor-not-allowed disabled:opacity-60"
-            value={getHeadingValue(editor)}
+            value=""
             onChange={(e) => {
-              const raw = e.target.value;
-
-              if (raw === "0") {
-                editor.chain().focus().setParagraph().run();
-                return;
-              }
-
-              editor
-                .chain()
-                .focus()
-                .toggleHeading({ level: Number(raw) as Level })
-                .run();
+              const tag = e.target.value === "0" ? "p" : "h" + e.target.value;
+              insert("<" + tag + ">", "</" + tag + ">");
             }}
             disabled={props.disabled}
           >
+            <option value="" disabled hidden>Paragraph</option>
             <option value="0">Paragraph</option>
             <option value="1">H1</option>
             <option value="2">H2</option>
@@ -178,84 +107,17 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor
             <option value="5">H5</option>
             <option value="6">H6</option>
           </select>
-
           <div className="h-6 w-px bg-border" />
-
-          <button
-            type="button"
-            className={btn(editor.isActive("bold"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleBold().run()}
-            disabled={props.disabled}
-            title="Bold"
-          >
-            <b>B</b>
-          </button>
-
-          <button
-            type="button"
-            className={btn(editor.isActive("italic"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-            disabled={props.disabled}
-            title="Italic"
-          >
-            <i>I</i>
-          </button>
-
-          <button
-            type="button"
-            className={btn(editor.isActive("underline"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleUnderline().run()}
-            disabled={props.disabled}
-            title="Underline"
-          >
-            <u>U</u>
-          </button>
-
-          <button
-            type="button"
-            className={btn(editor.isActive("strike"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleStrike().run()}
-            disabled={props.disabled}
-            title="Strike"
-          >
-            <s>S</s>
-          </button>
-
-          <HighlightButton
-            type="button"
-            className={btn(editor.isActive("highlight"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleHighlight().run()}
-            disabled={props.disabled}
-            title="Highlight"
-          />
-
-          <button
-            type="button"
-            className={btn(editor.isActive("blockquote"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleBlockquote().run()}
-            disabled={props.disabled}
-            title="Blockquote"
-          >
-            ❝
-          </button>
-
-          <CodeButton
-            type="button"
-            className={btn(editor.isActive("codeBlock"))}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-            disabled={props.disabled}
-            title="Code block"
-          />
-
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<strong>", "</strong>")} disabled={props.disabled} title="Bold"><b>B</b></button>
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<em>", "</em>")} disabled={props.disabled} title="Italic"><i>I</i></button>
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<u>", "</u>")} disabled={props.disabled} title="Underline"><u>U</u></button>
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<s>", "</s>")} disabled={props.disabled} title="Strike"><s>S</s></button>
+          <HighlightButton type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<mark>", "</mark>")} disabled={props.disabled} title="Highlight" />
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<blockquote>", "</blockquote>")} disabled={props.disabled} title="Blockquote">❝</button>
+          <CodeButton type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<pre><code>", "</code></pre>")} disabled={props.disabled} title="Code block" />
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<br>")} disabled={props.disabled} title="Line break">↵</button>
+          <button type="button" className={btn} onMouseDown={(e) => e.preventDefault()} onClick={() => insert("<hr>")} disabled={props.disabled} title="Horizontal rule">―</button>
           <div className="h-6 w-px bg-border" />
-
           <div className="relative flex items-center">
             <button
               type="button"
@@ -265,19 +127,12 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor
               className="flex h-8 w-8 items-center justify-center rounded-xl bg-muted transition hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
               title="Text color"
             >
-              <span
-                className="h-4 w-4 rounded-full border border-border"
-                style={{ backgroundColor: getActiveTextColor() || "#000000" }}
-              />
+              <span className="h-4 w-4 rounded-full border border-border" style={{ backgroundColor: "#000000" }} />
             </button>
-
             {colorMenuOpen ? (
               <div
                 className="absolute left-0 top-10 z-[100] grid min-w-[160px] grid-cols-5 gap-3 rounded-2xl border border-border bg-popover p-3 shadow-panel"
-                style={{
-                  transform: "translateZ(0)",
-                  backfaceVisibility: "hidden",
-                }}
+                style={{ transform: "translateZ(0)", backfaceVisibility: "hidden" }}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => e.stopPropagation()}
               >
@@ -289,11 +144,7 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor
                     style={{ backgroundColor: item.value || "#ffffff" }}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (!item.value) {
-                        editor.chain().focus().unsetColor().run();
-                      } else {
-                        editor.chain().focus().setColor(item.value).run();
-                      }
+                      insert('<span style="color: ' + (item.value || "inherit") + '">', "</span>");
                       setColorMenuOpen(false);
                     }}
                     disabled={props.disabled}
@@ -305,15 +156,29 @@ const TiptapEditor = forwardRef<TiptapEditorHandle, Props>(function TiptapEditor
           </div>
         </div>
       ) : null}
-
-      <div
-        className={[
-          "tiptap-editor min-h-[140px] px-4 py-3 text-sm text-foreground",
-          "focus-within:ring-2 focus-within:ring-ring/20",
-          props.className || "",
-        ].join(" ")}
-      >
-        <EditorContent editor={editor} />
+      <div className={["tiptap-editor min-h-[140px] px-4 py-3 text-sm text-foreground", props.className || ""].join(" ")}>
+        <textarea
+          ref={textarea}
+          aria-label="Message body"
+          className="block min-h-[120px] w-full resize-none border-none bg-transparent p-0 font-[inherit] text-[inherit] leading-[inherit] text-foreground outline-none placeholder:text-muted-foreground"
+          style={{ outline: "none" }}
+          value={props.value || ""}
+          onChange={(e) => props.onChange(e.target.value)}
+          onFocus={() => setIsEditorFocused(true)}
+          onKeyDown={(event) => {
+            if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+            if (event.key.toLowerCase() === "b") {
+              event.preventDefault();
+              insert("<strong>", "</strong>");
+            } else if (event.key.toLowerCase() === "i") {
+              event.preventDefault();
+              insert("<em>", "</em>");
+            }
+          }}
+          placeholder={props.placeholder}
+          disabled={props.disabled}
+          spellCheck={false}
+        />
       </div>
     </div>
   );
