@@ -187,7 +187,7 @@ export default function CaseExchangesTab(props: Props) {
                 <div className="max-h-[1200px] space-y-4 overflow-auto pr-1">
                   {props.exchanges
                     .slice()
-                    .sort((a, b) => (Date.parse(String(a.created_at ?? "")) || 0) - (Date.parse(String(b.created_at ?? "")) || 0))
+                    .sort((a, b) => (Date.parse(String(b.created_at ?? "")) || 0) - (Date.parse(String(a.created_at ?? "")) || 0))
                     .map((x, idx, arr) => {
                       const isOutbound = String(x.direction) === "outbound";
                       const prev = idx > 0 ? arr[idx - 1] : null;

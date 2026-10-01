@@ -4300,7 +4300,7 @@ def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
     ]
 
     in_reply_to = str(raw.get("in_reply_to") or "").strip()
-    if not in_reply_to and references:
+    if not in_reply_to and references and not exchange.is_followup:
         in_reply_to = references[-1]
 
     headers = {}
@@ -4323,6 +4323,7 @@ def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
         "bcc": exchange.bcc or [],
         "message_id": exchange.message_id or "",
         "in_reply_to": in_reply_to,
+        "is_followup": exchange.is_followup,
         "references": references,
         "headers": headers,
         "created_at": exchange.created_at.isoformat() if exchange.created_at else "",

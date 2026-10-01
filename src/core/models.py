@@ -406,6 +406,31 @@ class CaseExchange(models.Model):
     def __str__(self) -> str:
         return f"{self.case_id} {self.direction} {self.channel} {self.created_at}"
 
+    @property
+    def is_followup(self):
+        return isinstance(self.raw, dict) and self.raw.get("kind") == "auto_followup"
+
+    def reply_references(self):
+        values = [str(value).strip() for value in (self.references or []) if str(value or "").strip()]
+        parent = str(self.message_id or "").strip()
+        return list(dict.fromkeys(values + ([parent] if parent else [])))
+
+    def is_reply_to(self, source):
+        if self.direction != "inbound" or self.case_id != source.case_id:
+            return False
+        source_id = str(source.message_id or "").strip().strip("<>")
+        if not source_id:
+            return False
+        raw = self.raw if isinstance(self.raw, dict) else {}
+        parent = str(raw.get("in_reply_to") or "").strip()
+        headers = raw.get("headers")
+        if not parent and isinstance(headers, dict):
+            parent = next((str(value or "").strip() for key, value in headers.items() if str(key).lower() == "in-reply-to"), "")
+        if not parent:
+            references = [str(value).strip() for value in (self.references or []) if str(value or "").strip()]
+            parent = references[-1] if references else ""
+        return parent.strip("<>") == source_id
+
 
 class CaseExchangeFollowup(models.Model):
     class Action(models.TextChoices):

@@ -323,11 +323,11 @@ def run_case_auto_followups():
             skip("delay_not_reached")
             continue
 
-        replied = CaseExchange.objects.filter(
+        replied = any(message.is_reply_to(source) for message in CaseExchange.objects.filter(
             case=case,
             direction="inbound",
             created_at__gt=source.created_at,
-        ).exists()
+        ).only("case_id", "direction", "references", "raw").iterator())
 
         if replied:
             cfg.enabled = False
@@ -362,9 +362,10 @@ def run_case_auto_followups():
                 subject=source.subject or "",
                 body=cfg.quickpart.body or "",
                 message_id="",
-                references=list(source.references or []),
+                references=source.reply_references(),
                 raw={
                     "kind": "auto_followup",
+                    "in_reply_to": str(source.message_id or "").strip(),
                     "source_exchange_id": str(source.id),
                     "followup_config_id": str(cfg.id),
                     "quickpart_id": str(cfg.quickpart.id),
@@ -416,11 +417,11 @@ def run_case_auto_followups():
         if last_outbound.created_at > threshold:
             continue
 
-        replied = CaseExchange.objects.filter(
+        replied = any(message.is_reply_to(last_outbound) for message in CaseExchange.objects.filter(
             case=case,
             direction="inbound",
             created_at__gt=last_outbound.created_at,
-        ).exists()
+        ).only("case_id", "direction", "references", "raw").iterator())
 
         if replied:
             continue
@@ -451,9 +452,10 @@ def run_case_auto_followups():
             subject=last_outbound.subject or "",
             body=qp.body or "",
             message_id="",
-            references=list(last_outbound.references or []),
+            references=last_outbound.reply_references(),
             raw={
                 "kind": "auto_followup",
+                "in_reply_to": str(last_outbound.message_id or "").strip(),
                 "source_exchange_id": str(last_outbound.id),
                 "quickpart_id": str(qp.id),
                 "action": case.auto_followup_action,

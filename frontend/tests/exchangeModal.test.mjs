@@ -128,6 +128,13 @@ test("Exchange bodies and composer retain raw HTML without active markup", async
       assert.doesNotMatch(html, /<(script|img|a|iframe|hr)\b/i);
     }
     const { default: Tab } = await server.ssrLoadModule("/src/components/cases/detail/CaseExchangesTab.tsx");
+    const ordered = renderToStaticMarkup(React.createElement(Tab, {
+      exchanges: [
+        { id: "old", direction: "inbound", channel: "email", body: "OLDER-MESSAGE", created_at: "2026-09-12T12:00:00Z", to: [] },
+        { id: "new", direction: "outbound", channel: "email", body: "NEWER-MESSAGE", created_at: "2026-09-13T12:00:00Z", to: [] },
+      ], selectedExchangeIds: {},
+    }));
+    assert.ok(ordered.indexOf("NEWER-MESSAGE") < ordered.indexOf("OLDER-MESSAGE"));
     for (const direction of ["inbound", "outbound"]) {
       const html = renderToStaticMarkup(React.createElement(Tab, {
         exchanges: [{ id: "message", direction, channel: "email", body: "<hr><br>", created_at: "2026-09-12T12:00:00Z", to: [] }],
