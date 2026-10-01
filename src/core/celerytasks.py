@@ -25,6 +25,12 @@ from .services_chat import execute_chat_run
 
 
 @shared_task
+def run_automation_llm_comment_task(**kwargs):
+    from .services_automation import run_llm_comment_action
+    return run_llm_comment_action(**kwargs)
+
+
+@shared_task
 def auto_archive_cases() -> dict:
     s, _ = CaseRetentionSettings.objects.get_or_create(id=1)
 

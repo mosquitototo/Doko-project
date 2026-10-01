@@ -87,6 +87,7 @@ ALLOWED_OPERATORS = {
 }
 
 ACTION_TYPES = {
+    "llm_comment",
     "add_comment",
     "exchange_message",
     "exchange_reply_last_inbound",
@@ -2389,6 +2390,67 @@ def _run_investigation_template(ctx: AutomationContext, action: dict) -> dict:
     return response
 
 
+def run_llm_comment_action(*, execution_log_id, action_index, scope, target_id, customer_id, action):
+    from types import SimpleNamespace
+    from .services_chat import _format_prompt
+    from .services_chat_context import ChatContextRequest, PROVIDERS, _minimize_context
+
+    if not _claim_async_automation_action(execution_log_id=execution_log_id, action_index=action_index):
+        return {"status": "skipped"}
+
+    try:
+        log = AutomationExecutionLog.objects.select_related("rule").get(pk=execution_log_id)
+        if scope not in {"alert", "case"} or log.scope != scope or str(log.target_id) != str(target_id):
+            raise ValueError("Invalid target")
+        rule = log.rule
+        if not rule or not rule.is_enabled or rule.scope != scope:
+            raise ValueError("Rule unavailable")
+        model = Alert if scope == "alert" else Case
+        target = model.objects.get(pk=target_id, is_deleted=False)
+        if str(target.customer_id or "") != customer_id:
+            raise ValueError("Target customer changed")
+        provider = AIProvider.objects.filter(is_enabled=True, is_default=True).first()
+        if not provider:
+            raise ValueError("No enabled default AI provider")
+        prompt = action.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
+            raise ValueError("Invalid prompt")
+        req = ChatContextRequest(user=SimpleNamespace(is_staff=True), page_type=scope, object_id=str(target.id),
+                                 current_tab="summary", inclusions=["summary", "iocs", "assets"],
+                                 customer_id=customer_id or None)
+        snapshot = _minimize_context(PROVIDERS[scope].build(req))
+        if snapshot.get("missing") or str(snapshot.get("header", {}).get("id")) != str(target.id):
+            raise PermissionError("Target unavailable")
+        answer = LLMService(provider).generate(
+            system_prompt=_build_system_prompt(provider),
+            user_prompt=_format_prompt(to_json_safe(snapshot), prompt)
+            + "\n\nNo investigation template was executed.\nRespond normally.\n",
+        )
+        if not isinstance(answer, str) or not answer.strip():
+            raise ValueError("Empty LLM response")
+        with transaction.atomic():
+            target = model.objects.select_for_update().get(pk=target_id, is_deleted=False)
+            if str(target.customer_id or "") != customer_id:
+                raise ValueError("Target customer changed")
+            if not AutomationRule.objects.filter(pk=rule.pk, is_enabled=True).exists():
+                raise ValueError("Rule disabled")
+            if not AIProvider.objects.filter(pk=provider.pk, is_enabled=True).exists():
+                raise ValueError("Provider disabled")
+            if scope == "alert":
+                comment = AlertComment.objects.create(alert=target, author=None, author_label="Catbot", text=answer)
+            else:
+                comment = Comment.objects.create(case=target, author=None, author_label="Catbot", text=answer)
+                _create_timeline(target, "Automation Catbot comment added", "comment_added")
+            result = {"comment_id": str(comment.id)}
+            if not _update_async_automation_action(execution_log_id=execution_log_id, action_index=action_index, status="success", result=result):
+                raise ValueError("Execution unavailable")
+        return {"status": "success", **result}
+    except Exception:
+        _update_async_automation_action(execution_log_id=execution_log_id, action_index=action_index,
+                                        status="failed", error="LLM comment failed: check target and AI provider configuration.")
+        return {"status": "failed"}
+
+
 def _queue_investigation_template_action(ctx: AutomationContext, action: dict) -> dict:
     items, processed_item_keys, skipped_item_keys = _prepare_investigation_items(
         ctx,
@@ -2566,6 +2628,16 @@ def execute_action(ctx: AutomationContext, action: dict) -> dict:
     if action_type not in ACTION_TYPES:
         raise ValueError("Unsupported automation action")
 
+    if action_type == "llm_comment":
+        prompt = action.get("prompt")
+        if ctx.scope not in {"alert", "case"} or not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
+            raise ValueError("LLM comment requires an alert or case and a prompt of 1 to 16000 characters")
+        return {"queued": True, "_deferred_task": {
+            "scope": ctx.scope, "target_id": ctx.target_id,
+            "customer_id": str(ctx.target.customer_id or ""),
+            "action": {"type": "llm_comment", "prompt": prompt},
+        }}
+
     if action_type == "add_comment":
         return _add_comment(ctx, action)
 
@@ -2660,10 +2732,13 @@ def _dispatch_async_automation_action(
     action_index: int,
     payload: dict,
 ) -> None:
-    from .celerytasks import run_automation_investigation_template_action_task
+    from .celerytasks import run_automation_investigation_template_action_task, run_automation_llm_comment_task
+
+    is_llm = (payload.get("action") or {}).get("type") == "llm_comment"
+    task = run_automation_llm_comment_task if is_llm else run_automation_investigation_template_action_task
 
     try:
-        run_automation_investigation_template_action_task.apply_async(
+        task.apply_async(
             kwargs={
                 **payload,
                 "execution_log_id": execution_log_id,
@@ -2675,7 +2750,7 @@ def _dispatch_async_automation_action(
             execution_log_id=execution_log_id,
             action_index=action_index,
             status="failed",
-            error="Unable to queue investigation template action",
+            error="Unable to queue LLM comment action" if is_llm else "Unable to queue investigation template action",
         )
 
 

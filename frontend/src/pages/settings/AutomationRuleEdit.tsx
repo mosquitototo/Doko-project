@@ -816,6 +816,7 @@ function ActionEditor({
           >
           {[
             { value: "add_comment", label: "Add comment", scopes: ["case", "alert", "hunt"] },
+            { value: "llm_comment", label: "Catbot prompt and Add comment", scopes: ["case", "alert"] },
             { value: "exchange_message", label: "Add Exchange message", scopes: ["case", "alert"] },
             { value: "exchange_reply_last_inbound", label: "Reply to last inbound Exchange", scopes: ["case", "alert"] },
             { value: "exchange_reply_all_inbound", label: "Reply to all inbound Exchanges", scopes: ["case", "alert"] },
@@ -834,6 +835,23 @@ function ActionEditor({
           }
           </SettingSelect>
         </label>
+
+        {type === "llm_comment" ? (
+          <label className="block space-y-2">
+            <FieldLabel required>Prompt</FieldLabel>
+            <SettingTextarea
+              rows={5}
+              maxLength={16000}
+              value={action.prompt || ""}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...action, prompt: e.target.value })}
+              placeholder="Analyse this alert and summarize your findings."
+            />
+            <div className="text-xs text-muted-foreground">
+              When used, it will send this prompt to the LLM then put the result with a comment.
+            </div>
+          </label>
+        ) : null}
 
         {type === "add_comment" ? (
           <label className="block space-y-2">
@@ -1108,6 +1126,11 @@ function ActionEditor({
 function validateActions(actions: AutomationAction[], scope: AutomationScope) {
   for (const action of actions) {
     const type = action.type || "add_comment";
+
+    if (type === "llm_comment") {
+      if (scope !== "case" && scope !== "alert") return "Catbot comments are available for cases and alerts only.";
+      if (!String(action.prompt || "").trim() || String(action.prompt).length > 16000) return "Catbot prompt must contain 1 to 16000 characters.";
+    }
 
     if (type.startsWith("change_") && !String(action.value || "").trim()) {
       return "Every change action must have a value.";

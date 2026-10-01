@@ -235,6 +235,7 @@ AUTOMATION_CONDITION_FIELDS = {
 }
 
 AUTOMATION_ACTION_TYPES = {
+    "llm_comment",
     "add_comment",
     "exchange_message",
     "exchange_reply_last_inbound",
@@ -276,6 +277,7 @@ AUTOMATION_CONDITION_FIELDS_BY_SCOPE = {
 }
 
 AUTOMATION_ACTION_SCOPES = {
+    "llm_comment": {"alert", "case"},
     "add_comment": {"alert", "case", "hunt"},
     "exchange_message": {"alert", "case"},
     "exchange_reply_last_inbound": {"alert", "case"},
@@ -439,6 +441,11 @@ def validate_automation_actions(value):
         action_type = str(action.get("type") or "").strip()
         if action_type not in AUTOMATION_ACTION_TYPES:
             raise serializers.ValidationError(f"Unsupported automation action: {action_type}")
+
+        if action_type == "llm_comment":
+            prompt = action.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 16000:
+                raise serializers.ValidationError("LLM comment prompt must contain 1 to 16000 characters.")
 
         if action_type in {
             "exchange_message",
