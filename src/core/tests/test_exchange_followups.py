@@ -1,8 +1,11 @@
 from django.test import TestCase
 from django.utils import timezone
+from django.contrib.auth import get_user_model
+from unittest.mock import patch
+from rest_framework.test import APIRequestFactory, force_authenticate
 from core.models import Case, CaseExchange, CaseExchangeFollowup, CaseExchangeReplyQuickpart
 from core.celerytasks import run_case_auto_followups
-from core.views import dispatch_case_exchange_send
+from core.views import dispatch_case_exchange_send, CaseExchangeFollowupBulkView
 
 
 class ExchangeFollowupTests(TestCase):
@@ -18,7 +21,74 @@ class ExchangeFollowupTests(TestCase):
             source.refresh_from_db()
         cfg = CaseExchangeFollowup.objects.create(exchange=source, quickpart=self.quickpart, enabled=True,
                                                   delay_value=1, delay_unit="hour", action=action)
+        if due:
+            CaseExchangeFollowup.objects.filter(pk=cfg.pk).update(updated_at=source.created_at)
+            cfg.refresh_from_db()
         return source, cfg
+
+    def activate(self, source):
+        user = get_user_model().objects.create_user(username="followup-admin", is_staff=True)
+        request = APIRequestFactory().post("/", {
+            "exchange_ids": [str(source.pk)], "enabled": True,
+            "delay_value": 20, "delay_unit": "minute",
+            "quickpart_id": str(self.quickpart.pk), "action": "save",
+        }, format="json")
+        force_authenticate(request, user=user)
+        response = CaseExchangeFollowupBulkView.as_view()(request, case_id=str(self.case.pk))
+        self.assertEqual(response.status_code, 200)
+
+    def test_old_message_waits_from_activation_and_triggers_only_once(self):
+        source, cfg = self.source("<old-message>")
+        activated_at = timezone.now()
+        with patch("django.utils.timezone.now", return_value=activated_at):
+            self.activate(source)
+        for minutes in (0, 19):
+            with patch("django.utils.timezone.now", return_value=activated_at + timezone.timedelta(minutes=minutes)):
+                run_case_auto_followups()
+            self.assertFalse(CaseExchange.objects.filter(raw__source_exchange_id=str(source.pk)).exists())
+        with patch("django.utils.timezone.now", return_value=activated_at + timezone.timedelta(minutes=20)):
+            run_case_auto_followups()
+            run_case_auto_followups()
+        self.assertEqual(CaseExchange.objects.filter(raw__source_exchange_id=str(source.pk)).count(), 1)
+
+    def test_reactivation_preserves_previous_reminder_and_starts_new_cycle(self):
+        source, cfg = self.source("<reactivated>")
+        run_case_auto_followups()
+        previous = CaseExchange.objects.get(raw__source_exchange_id=str(source.pk))
+        activated_at = timezone.now()
+        with patch("django.utils.timezone.now", return_value=activated_at):
+            self.activate(source)
+            run_case_auto_followups()
+        cfg.refresh_from_db()
+        self.assertTrue(cfg.enabled)
+        self.assertIsNone(cfg.last_triggered_at)
+        self.assertEqual(CaseExchange.objects.filter(raw__source_exchange_id=str(source.pk)).count(), 1)
+        with patch("django.utils.timezone.now", return_value=activated_at + timezone.timedelta(minutes=20)):
+            run_case_auto_followups()
+            run_case_auto_followups()
+        self.assertTrue(CaseExchange.objects.filter(pk=previous.pk).exists())
+        self.assertEqual(CaseExchange.objects.filter(raw__source_exchange_id=str(source.pk)).count(), 2)
+
+    def test_reply_after_reactivation_cancels_new_cycle(self):
+        source, cfg = self.source("<answered-reactivation>")
+        run_case_auto_followups()
+        self.activate(source)
+        CaseExchange.objects.create(case=self.case, direction="inbound", raw={"in_reply_to": source.message_id})
+        with patch("django.utils.timezone.now", return_value=timezone.now() + timezone.timedelta(minutes=21)):
+            run_case_auto_followups()
+        cfg.refresh_from_db()
+        self.assertFalse(cfg.enabled)
+        self.assertEqual(CaseExchange.objects.filter(raw__source_exchange_id=str(source.pk)).count(), 1)
+
+    def test_case_update_does_not_postpone_followup(self):
+        source, cfg = self.source("<case-updated>")
+        activation_time = cfg.updated_at
+        self.case.title = "Updated case"
+        self.case.save()
+        cfg.refresh_from_db()
+        self.assertEqual(cfg.updated_at, activation_time)
+        run_case_auto_followups()
+        self.assertTrue(CaseExchange.objects.filter(raw__source_exchange_id=str(source.pk)).exists())
 
     def test_followup_targets_selected_message_and_marks_send_output(self):
         source, cfg = self.source("<sent-message>", action="send")

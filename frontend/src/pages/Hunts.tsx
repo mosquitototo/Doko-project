@@ -108,7 +108,7 @@ export default function HuntsPage() {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
 
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>(["to_do", "in_progress"]);
   const [customerFilter, setCustomerFilter] = useState<string[]>([]);
   const [ownerFilter, setOwnerFilter] = useState<string[]>([]);
 
@@ -231,7 +231,7 @@ export default function HuntsPage() {
   const clearFilters = () => {
     setSearchInput("");
     setSearch("");
-    setStatusFilter([]);
+    setStatusFilter(["to_do", "in_progress"]);
     setCustomerFilter([]);
     setOwnerFilter([]);
     setIncludeArchived(false);

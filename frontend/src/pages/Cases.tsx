@@ -237,7 +237,7 @@ export default function Tickets() {
     [items]
   );
 
-  const [status, setStatus] = useState<string[]>([]);
+  const [status, setStatus] = useState<string[]>(["open", "in_progress"]);
   const [owner, setOwner] = useState<string[]>([]);
   const [classification, setClassification] = useState<string[]>([]);
   const [severity, setSeverity] = useState<string[]>([]);
@@ -639,7 +639,7 @@ export default function Tickets() {
 
   const clearFilters = () => {
     setPage(1);
-    setStatus([]);
+    setStatus(["open", "in_progress"]);
     setOwner([]);
     setSeverity([]);
     setClassification([]);

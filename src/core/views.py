@@ -4608,13 +4608,15 @@ class CaseExchangeFollowupBulkView(APIView):
         updated = []
         with transaction.atomic():
             for exchange in exchanges:
-                cfg, _ = CaseExchangeFollowup.objects.get_or_create(exchange=exchange)
+                cfg, _ = CaseExchangeFollowup.objects.select_for_update().get_or_create(exchange=exchange)
                 cfg.enabled = bool(request.data.get("enabled", True))
+                if cfg.enabled:
+                    cfg.last_triggered_at = None
                 cfg.delay_value = delay_value
                 cfg.delay_unit = delay_unit
                 cfg.quickpart = quickpart
                 cfg.action = action
-                cfg.save(update_fields=["enabled", "delay_value", "delay_unit", "quickpart", "action", "updated_at"])
+                cfg.save(update_fields=["enabled", "delay_value", "delay_unit", "quickpart", "action", "last_triggered_at", "updated_at"])
                 updated.append(cfg)
 
         audit_event(

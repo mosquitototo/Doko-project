@@ -325,7 +325,7 @@ def run_case_auto_followups():
 
         threshold = _followup_threshold(now, cfg.delay_value, cfg.delay_unit)
 
-        if source.created_at > threshold:
+        if cfg.updated_at > threshold:
             skip("delay_not_reached")
             continue
 
@@ -346,6 +346,7 @@ def run_case_auto_followups():
             direction="outbound",
             raw__kind="auto_followup",
             raw__source_exchange_id=str(source.id),
+            created_at__gte=cfg.updated_at,
         ).exists()
 
         if already_followed_up:
@@ -356,6 +357,11 @@ def run_case_auto_followups():
             continue
 
         with transaction.atomic():
+            current_cfg = CaseExchangeFollowup.objects.select_for_update().get(pk=cfg.pk)
+            if not current_cfg.enabled or current_cfg.last_triggered_at is not None or current_cfg.updated_at != cfg.updated_at:
+                skip("configuration_changed")
+                continue
+
             followup = CaseExchange.objects.create(
                 case=case,
                 created_by=None,
