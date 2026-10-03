@@ -495,7 +495,7 @@ class PasswordResetConfirmView(APIView):
                 object_repr="",
                 metadata={"outcome": "fail", "reason": "invalid_uid"},
             )
-            return Response({"error": "invalid link"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "invalid or expired link"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not getattr(u, "is_active", False):
             audit_safe_create(
