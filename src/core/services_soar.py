@@ -3,6 +3,7 @@ import datetime
 import requests
 import json
 import logging
+import re
 
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -475,18 +476,16 @@ class SOARService:
         replacements["{run.id}"] = str(run_context.get("id") or "")
         replacements["{run.request_id}"] = str(run_context.get("request_id") or "")
 
-        for key, replacement in replacements.items():
-            rendered = rendered.replace(key, replacement)
-
         variables = context.get("variables", {}) or {}
         for key, replacement in variables.items():
-            rendered = rendered.replace(f"{{variables.{key}}}", stringify(replacement))
+            replacements[f"{{variables.{key}}}"] = stringify(replacement)
 
         provider_execution = context.get("provider_execution", {}) or {}
         for key, replacement in provider_execution.items():
-            rendered = rendered.replace(f"{{provider_execution.{key}}}", stringify(replacement))
+            replacements[f"{{provider_execution.{key}}}"] = stringify(replacement)
 
-        return rendered
+        pattern = "|".join(re.escape(key) for key in sorted(replacements, key=len, reverse=True))
+        return re.sub(pattern, lambda match: replacements[match.group(0)], rendered)
 
     def _render_value(self, value, context: dict):
         if isinstance(value, str):
