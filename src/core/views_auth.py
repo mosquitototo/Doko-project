@@ -1,5 +1,6 @@
 import time
 import logging
+from collections.abc import Mapping
 
 from django.contrib.auth import (
     authenticate,
@@ -26,6 +27,7 @@ from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.throttling import AnonRateThrottle
+from rest_framework.exceptions import ValidationError
 
 from .models import AuditLog
 from .audit import sanitize_audit_metadata
@@ -65,9 +67,18 @@ def get_request_meta(request):
     return ip, ua, path, method
 
 
+def _validate_text_payload(data, fields):
+    if not isinstance(data, Mapping):
+        raise ValidationError({"detail": "Expected a JSON object."})
+    for field in fields:
+        if field in data and not isinstance(data[field], str):
+            raise ValidationError({field: "Expected a string."})
+
+
 def authenticate_from_payload(request):
     import hashlib
 
+    _validate_text_payload(request.data, ("username", "password"))
     username_in = (request.data.get("username") or "").strip()
     password = request.data.get("password") or ""
 
@@ -427,6 +438,7 @@ class PasswordResetConfirmView(APIView):
     def post(self, request, *args, **kwargs):
         t0 = time.time()
 
+        _validate_text_payload(request.data, ("uid", "token", "new_password"))
         uid = (request.data.get("uid") or "").strip()
         token = (request.data.get("token") or "").strip()
         new_password = request.data.get("new_password") or ""
