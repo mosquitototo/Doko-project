@@ -13,6 +13,8 @@ from .models import (
 from django.contrib.auth import get_user_model
 from knox.models import AuthToken
 from .crypto_secrets import encrypt_secret
+from .rbac import INSTANCE_ADMIN_PERMISSIONS, user_has_perm
+from rest_framework.exceptions import PermissionDenied
 
 User = get_user_model()
 
@@ -41,6 +43,12 @@ class RoleSerializer(serializers.ModelSerializer):
         )
         if existing_ids != unique_ids:
             raise serializers.ValidationError("Unknown permission id.")
+        request = self.context.get("request")
+        protected = Permission.objects.filter(id__in=unique_ids, code__in=INSTANCE_ADMIN_PERMISSIONS).exists()
+        if self.instance:
+            protected = protected or self.instance.permissions.filter(code__in=INSTANCE_ADMIN_PERMISSIONS).exists()
+        if protected and request and not user_has_perm(request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can change instance administration permissions.")
         return list(unique_ids)
 
     def create(self, validated_data):
