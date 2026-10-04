@@ -3,6 +3,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Prefetch
 from django.utils import timezone
@@ -10,13 +11,25 @@ from django.utils import timezone
 from .models import ChatGeneratedDraft, ChatRun, ChatSession, InvestigationTemplate
 from .rbac import user_has_perm, get_accessible_customer_ids
 from .serializers_chat import ChatRunSerializer, ChatSessionSerializer
-from .services_chat import create_chat_run, generate_comment_draft
+from .services_chat import create_chat_run, generate_comment_draft, parse_chat_command
+from .chat_limits import reserve_prompt
 from .services_chat_posting import post_generated_draft, user_has_draft_target_permission
 from .celerytasks import execute_chat_run_task
 
 
 def _forbidden():
     return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+
+@transaction.atomic
+def _create_limited_prompt_run(**kwargs):
+    user = kwargs["user"]
+    get_user_model().objects.select_for_update().get(pk=user.pk)
+    reserve_prompt(user.pk)
+    run = create_chat_run(**kwargs)
+    run.provider_execution = {**(run.provider_execution or {}), "interactive_llm": True}
+    run.save(update_fields=["provider_execution"])
+    return run
 
 
 def _has_any_chat_run_perm(user):
@@ -191,7 +204,14 @@ class ChatRunCreateView(APIView):
             if str(customer_id) not in allowed:
                 return _forbidden()
             
-        run = create_chat_run(
+        parsed_command, _, _ = parse_chat_command(message)
+        templates = InvestigationTemplate.objects.filter(is_enabled=True, soar_provider__is_enabled=True)
+        known_command = bool(
+            (template_code and templates.filter(code=template_code).exists())
+            or ((chat_command or parsed_command) and templates.filter(chat_command=(chat_command or parsed_command).lower()).exists())
+        )
+        create_run = create_chat_run if known_command else _create_limited_prompt_run
+        run = create_run(
             user=request.user,
             session=session,
             request_id=request_id,

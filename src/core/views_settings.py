@@ -55,7 +55,7 @@ from .models import (
 from .permissions import HasPermissionCode, CanManageInstanceSettings
 from .serializers import AuditLogSerializer, MeSerializer
 from .serializers_chat import (AIProviderSerializer, SOARProviderSerializer, InvestigationTemplateSerializer,)
-from .rbac import user_has_perm, is_doko_admin
+from .rbac import user_has_perm, is_doko_admin, is_privileged_account, INSTANCE_ADMIN_PERMISSIONS
 from .audit import audit_event
 from .instance_backups import create_database_backup, restore_database_backup
 from .services_splunk_hec import test_splunk_hec_connection
@@ -408,7 +408,7 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     def update(self, request, *args, **kwargs):
         u = User.objects.select_for_update().get(pk=self.get_object().pk)
 
-        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
+        if is_privileged_account(u) and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can modify an administrator.")
         if u.is_staff and not u.is_active and not is_doko_admin(request.user):
             raise PermissionDenied("Only administrators can modify a disabled administrator.")
@@ -465,6 +465,8 @@ class SettingsUserRetrieveUpdateView(generics.RetrieveUpdateAPIView):
             valid_role_ids = set(Role.objects.filter(id__in=role_ids).values_list("id", flat=True))
             if len(valid_role_ids) != len(set(role_ids)):
                 return Response({"error": "unknown role id in role_ids"}, status=400)
+            if Permission.objects.filter(roles__id__in=valid_role_ids, code__in=INSTANCE_ADMIN_PERMISSIONS).exists() and not user_has_perm(request.user, "settings.instance.manage"):
+                raise PermissionDenied("Only instance managers can assign instance administration roles.")
 
         u.save()
         if not u.is_active:
@@ -514,7 +516,7 @@ class SettingsUserResetPasswordView(APIView):
 
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
-        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
+        if is_privileged_account(u) and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can reset admin passwords.")
         
         new_password = request.data.get("password") or ""
@@ -548,7 +550,7 @@ class SettingsUserPasswordResetLinkView(APIView):
     def post(self, request, pk: int):
         u = generics.get_object_or_404(User, pk=pk)
 
-        if u.is_staff and not user_has_perm(request.user, "settings.instance.manage"):
+        if is_privileged_account(u) and not user_has_perm(request.user, "settings.instance.manage"):
             raise PermissionDenied("Only instance managers can generate admin reset links.")
 
         if not u.is_active:
@@ -802,6 +804,8 @@ class SettingsRoleRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
         )
 
     def perform_destroy(self, instance):
+        if instance.permissions.filter(code__in=INSTANCE_ADMIN_PERMISSIONS).exists() and not user_has_perm(self.request.user, "settings.instance.manage"):
+            raise PermissionDenied("Only instance managers can delete instance administration roles.")
         snapshot = {
             "name": instance.name,
             "description": instance.description,

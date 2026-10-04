@@ -1,4 +1,5 @@
 from celery import shared_task
+from contextlib import nullcontext
 
 from dateutil.relativedelta import relativedelta
 
@@ -22,6 +23,7 @@ from .models import (
     CaseExchangeFollowup,
 )
 from .services_chat import execute_chat_run
+from .chat_limits import interactive_generation_slot
 
 
 @shared_task
@@ -248,7 +250,11 @@ def execute_chat_run_task(self, run_id: str):
         run.worker_task_id = self.request.id or ""
         run.save(update_fields=["worker_task_id", "updated_at"])
 
-    execute_chat_run(run)
+    slot = interactive_generation_slot(run.user_id) if (run.provider_execution or {}).get("interactive_llm") else nullcontext(True)
+    with slot as acquired:
+        if not acquired:
+            raise self.retry(countdown=5, max_retries=None)
+        execute_chat_run(run)
 
 
 

@@ -40,7 +40,10 @@ function safeNextPath(value: string | null) {
     if (decoded.startsWith("//")) return "/";
     if (decoded.includes("\\"))
       return "/";
-    return decoded;
+    if (/[\u0000-\u001f\u007f]/.test(decoded)) return "/";
+    const destination = new URL(decoded, window.location.origin);
+    if (destination.origin !== window.location.origin) return "/";
+    return `${destination.pathname}${destination.search}${destination.hash}`;
   } catch {
     return "/";
   }

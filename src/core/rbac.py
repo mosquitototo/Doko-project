@@ -29,6 +29,15 @@ def is_doko_admin(user) -> bool:
     )
 
 
+INSTANCE_ADMIN_PERMISSIONS = {"settings.instance.manage", "*"}
+
+
+def is_privileged_account(user) -> bool:
+    return bool(getattr(user, "is_staff", False)) or Permission.objects.filter(
+        roles__user_roles__user=user, code__in=INSTANCE_ADMIN_PERMISSIONS,
+    ).exists()
+
+
 def _is_customer_scoped_perm(code: str) -> bool:
     return str(code or "").startswith(CUSTOMER_SCOPED_PREFIXES)
 

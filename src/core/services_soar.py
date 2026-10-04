@@ -3,6 +3,8 @@ import datetime
 import requests
 import json
 import logging
+import re
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -78,6 +80,19 @@ def validate_soar_provider_url(url: str):
 
     if not value.startswith(("http://", "https://")):
         raise ValidationError("SOAR endpoint must start with http:// or https://")
+
+
+def _soar_origin(url):
+    value = str(url or "")
+    if any(ord(char) < 32 or ord(char) == 127 for char in value) or "\\" in value:
+        raise ValidationError("Invalid SOAR request URL")
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+            raise ValueError()
+        return parsed.scheme.lower(), parsed.hostname.lower(), parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    except ValueError as exc:
+        raise ValidationError("Invalid SOAR request URL") from exc
 
 
 def launch_soar_execution(*, run, template, variables: dict, prompt: str) -> dict:
@@ -475,18 +490,16 @@ class SOARService:
         replacements["{run.id}"] = str(run_context.get("id") or "")
         replacements["{run.request_id}"] = str(run_context.get("request_id") or "")
 
-        for key, replacement in replacements.items():
-            rendered = rendered.replace(key, replacement)
-
         variables = context.get("variables", {}) or {}
         for key, replacement in variables.items():
-            rendered = rendered.replace(f"{{variables.{key}}}", stringify(replacement))
+            replacements[f"{{variables.{key}}}"] = stringify(replacement)
 
         provider_execution = context.get("provider_execution", {}) or {}
         for key, replacement in provider_execution.items():
-            rendered = rendered.replace(f"{{provider_execution.{key}}}", stringify(replacement))
+            replacements[f"{{provider_execution.{key}}}"] = stringify(replacement)
 
-        return rendered
+        pattern = "|".join(re.escape(key) for key in sorted(replacements, key=len, reverse=True))
+        return re.sub(pattern, lambda match: replacements[match.group(0)], rendered)
 
     def _render_value(self, value, context: dict):
         if isinstance(value, str):
@@ -580,6 +593,17 @@ class SOARService:
             raise ValidationError("Missing url_template in SOAR request configuration")
 
         url = self._render_string(url_template, context)
+        allowed_origins = {_soar_origin(self.provider.base_url)}
+        configured_url = str(url_template).replace("{base_url}", self.provider.base_url.rstrip("/"))
+        configured_authority = urlsplit(configured_url).netloc
+        if configured_authority and "{" not in configured_authority and "}" not in configured_authority:
+            allowed_origins.add(_soar_origin(configured_url))
+        extra_origins = (getattr(self.provider, "request_config", None) or {}).get("allowed_origins", [])
+        if not isinstance(extra_origins, list) or not all(isinstance(item, str) for item in extra_origins):
+            raise ValidationError("SOAR allowed_origins must be a list of explicit URLs")
+        allowed_origins.update(_soar_origin(item) for item in extra_origins)
+        if _soar_origin(url) not in allowed_origins:
+            raise ValidationError("SOAR request destination is not explicitly configured")
         headers = self._build_headers_from_config(normalized_config, context)
         params = self._render_value(copy.deepcopy(normalized_config.get("query_params", {})) or {}, context)
         body_template = normalized_config.get("body_template", None)

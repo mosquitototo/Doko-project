@@ -92,6 +92,10 @@ Restoring a backup replaces the current database state. It does not merge record
 
 Application requests may be temporarily unavailable while the restore runs. Restart the application services after a restore if a worker still holds old database state.
 
+Doko validates the archive before changing data, writes and verifies a recovery backup, and rejects concurrent restores. Schema replacement and data restoration run in one PostgreSQL transaction: an SQL error rolls back the changes instead of leaving an empty database. The recovery file remains in the backup directory even when restoring an older database removes its entry from the interface.
+
+Only restore archives from a trusted source. A PostgreSQL backup contains executable SQL; format validation does not make an unknown archive safe. Schedule restoration during maintenance and stop incoming writes and background jobs first.
+
 ## Audit exports
 
 Audit records contain action identifiers, object identifiers, result status, request information and sanitized metadata. Action payloads and record content are not copied into the object display field. Sensitive metadata keys, including passwords, tokens, prompts, messages, descriptions, IoCs and assets, are redacted.
@@ -159,6 +163,23 @@ Deployment settings are read from the `.env` file referenced by Docker Compose.
 `DJANGO_SECRET_KEY` must contain a unique value of at least 32 characters when debug mode is disabled. It is also used to derive the internal connector signing secret when `CONNECTOR_HMAC_SECRET` is not set.
 
 `CONNECTOR_HMAC_SECRET` is optional. No manual calculation is needed: the web service and connector hub derive the same value automatically from `DJANGO_SECRET_KEY`.
+
+### Authentication limits and incoming proxies
+
+Login attempts are limited per account across the API and Django administration login. Password reset confirmation has a separate budget. Counters are shared through Redis. If Redis is unavailable, Doko logs a warning and falls back to per-process counters to keep authentication available; protection across workers is reduced until Redis recovers.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `DOKO_AUTH_LOGIN_PER_MINUTE` | `10` | Login attempts per account per minute. |
+| `DOKO_AUTH_RESET_PER_MINUTE` | `5` | Reset confirmation attempts per identifier per minute. |
+| `DOKO_AUTH_IP_PER_MINUTE` | `300` | Combined authentication attempts per client address per minute. |
+| `DOKO_TRUSTED_PROXY_CIDRS` | Empty | Comma-separated IP addresses or CIDRs of trusted incoming proxies. |
+| `DOKO_CHAT_PROMPTS_PER_MINUTE` | `20` | Interactive Catbot prompts per user in a rolling minute. |
+| `DOKO_CHAT_MAX_CONCURRENT` | `4` | Simultaneous interactive Catbot generations per user, across conversations. Extra accepted prompts wait in the worker queue. |
+
+These settings do not change the outbound proxy configured on this page. Without trusted proxy networks, authentication limits use the direct peer address and ignore `X-Forwarded-For`. Behind an Ingress or reverse proxy, configure only the actual trusted proxy networks and ensure the proxy sanitizes or appends the real client address. Do not trust every address (`0.0.0.0/0` or `::/0`). Size the combined address budget for deployments where many users share the same peer address. Authentication limits use fixed one-minute windows; HTTP 429 responses include a retry delay.
+
+Interactive Catbot limits do not apply to automation rules or configured SOAR commands. Reading results, cancelling a request and copying a result into a comment draft do not consume prompt budget. Clearing a conversation does not reset the rate limit. PostgreSQL releases generation slots when a worker disconnects, including after abnormal termination. Rate counters use the existing Redis broker; interactive submissions return HTTP 503 if that counter cannot be reached. No new database migration is required for these limits.
 
 The initial administrator uses `DOKO_ADMIN_USERNAME` and `DOKO_ADMIN_EMAIL`. `DOKO_ADMIN_PASSWORD` is optional. When it is absent, Doko generates a strong password and prints it once in the web service logs under `DOKO INITIAL SUPERUSER CREATED`.
 
