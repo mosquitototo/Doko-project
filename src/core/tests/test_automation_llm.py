@@ -23,6 +23,17 @@ class AutomationLLMTests(TestCase):
         self.assertEqual(result["_deferred_task"]["target_id"], str(self.alert.pk))
         generate.assert_not_called()
 
+    def test_one_hundred_events_keep_one_hundred_queued_prompts(self):
+        from core.services_automation import run_automation_rules_for_event
+        with patch("core.services_automation._dispatch_async_automation_action") as dispatch, patch("core.services_llm.LLMService.generate") as generate:
+            with self.captureOnCommitCallbacks(execute=True):
+                for index in range(100):
+                    alert = Alert.objects.create(title=f"Batch alert {index}", customer=self.customer)
+                    run_automation_rules_for_event(scope="alert", event="alert.created", target=alert, actor=self.user)
+        self.assertEqual(dispatch.call_count, 100)
+        self.assertEqual(AutomationExecutionLog.objects.filter(rule=self.rule, status="running").count(), 100)
+        generate.assert_not_called()
+
     def queued(self, target=None, prompt="Analyse this alert"):
         target = target or self.alert
         scope = "case" if isinstance(target, Case) else "alert"

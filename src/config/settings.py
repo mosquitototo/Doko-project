@@ -240,6 +240,9 @@ REST_KNOX = {
     "AUTH_HEADER_PREFIX": "Token",
 }
 
+DOKO_CHAT_PROMPTS_PER_MINUTE = max(1, int(os.getenv("DOKO_CHAT_PROMPTS_PER_MINUTE", "20")))
+DOKO_CHAT_MAX_CONCURRENT = max(1, int(os.getenv("DOKO_CHAT_MAX_CONCURRENT", "4")))
+
 CONNECTOR_HUB_URL = os.environ.get("CONNECTOR_HUB_URL", "").strip()
 CONNECTOR_HMAC_SECRET = os.environ.get("CONNECTOR_HMAC_SECRET", "").strip() or hmac.new(
     SECRET_KEY.encode("utf-8"),

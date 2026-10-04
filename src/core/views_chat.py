@@ -2,7 +2,10 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.exceptions import Throttled
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Prefetch
 from django.utils import timezone
@@ -17,6 +20,22 @@ from .celerytasks import execute_chat_run_task
 
 def _forbidden():
     return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+
+
+@transaction.atomic
+def _create_limited_prompt_run(**kwargs):
+    user = kwargs["user"]
+    get_user_model().objects.select_for_update().get(pk=user.pk)
+    runs = ChatRun.objects.filter(user=user, provider_execution__interactive_llm=True)
+    recent = runs.filter(created_at__gt=timezone.now() - timezone.timedelta(minutes=1))
+    if recent.count() >= settings.DOKO_CHAT_PROMPTS_PER_MINUTE:
+        raise Throttled(wait=60, detail="Interactive prompt rate limit reached.")
+    if runs.filter(status__in=["queued", "running"]).count() >= settings.DOKO_CHAT_MAX_CONCURRENT:
+        raise Throttled(wait=5, detail="Too many interactive generations are already in progress.")
+    run = create_chat_run(**kwargs)
+    run.provider_execution = {**(run.provider_execution or {}), "interactive_llm": True}
+    run.save(update_fields=["provider_execution"])
+    return run
 
 
 def _has_any_chat_run_perm(user):
@@ -191,7 +210,8 @@ class ChatRunCreateView(APIView):
             if str(customer_id) not in allowed:
                 return _forbidden()
             
-        run = create_chat_run(
+        create_run = create_chat_run if is_command_run else _create_limited_prompt_run
+        run = create_run(
             user=request.user,
             session=session,
             request_id=request_id,
