@@ -1,9 +1,12 @@
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+
+import psycopg
 
 from django.db import connections
 from django.conf import settings
@@ -36,7 +39,7 @@ def _looks_like_pg_custom_dump(path: Path) -> bool:
     
 
 def create_database_backup(*, user=None) -> InstanceBackup:
-    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
     filename = f"doko-db-{timestamp}.dump"
     backup_path = BACKUP_DIR / filename
 
@@ -117,65 +120,42 @@ def restore_database_backup(uploaded_file) -> None:
         if not _looks_like_pg_custom_dump(restore_path):
             raise ValueError("Invalid backup format.")
 
-        connections.close_all()
+        def run_command(command):
+            result = subprocess.run(command, env=env, check=False, capture_output=True, text=True)
+            if result.returncode:
+                raise RuntimeError((result.stderr or "").strip() or f"{command[0]} failed")
+            return result.stdout
 
-        safe_db_name = db_name.replace("'", "''")
+        catalog = run_command(["pg_restore", "--list", str(restore_path)])
+        sql_path = tmpdir_path / "restore.sql"
+        run_command(["pg_restore", "--no-owner", "--no-privileges", "--file", str(sql_path), str(restore_path)])
 
-        terminate_sql = f"""
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname = '{safe_db_name}'
-        AND pid <> pg_backend_pid();
-        """
+        with psycopg.connect(host=db_host, port=db_port, dbname=db_name, user=db_user, password=db_password, autocommit=True) as lock_connection:
+            locked = lock_connection.execute("SELECT pg_try_advisory_lock(1685023599, 1)").fetchone()[0]
+            if not locked:
+                raise RuntimeError("A database restore is already in progress.")
+            backup = create_database_backup()
+            backup_path = Path(backup.file_path)
+            if not backup_path.is_file() or backup_path.stat().st_size != backup.file_size or sha256_file(backup_path) != backup.sha256:
+                raise RuntimeError("Recovery backup verification failed.")
+            run_command(["pg_restore", "--list", str(backup_path)])
 
-        terminate_cmd = [
-            "psql",
-            "-h", db_host,
-            "-p", db_port,
-            "-U", db_user,
-            "-d", "postgres",
-            "-v", "ON_ERROR_STOP=1",
-            "-c", terminate_sql,
-        ]
-
-        drop_cmd = [
-            "dropdb",
-            "-h", db_host,
-            "-p", db_port,
-            "-U", db_user,
-            "--if-exists",
-            db_name,
-        ]
-
-        create_cmd = [
-            "createdb",
-            "-h", db_host,
-            "-p", db_port,
-            "-U", db_user,
-            db_name,
-        ]
-
-        restore_cmd = [
-            "pg_restore",
-            "-h", db_host,
-            "-p", db_port,
-            "-U", db_user,
-            "-d", db_name,
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-privileges",
-            str(restore_path),
-        ]
-
-        for cmd in (terminate_cmd, drop_cmd, create_cmd, restore_cmd):
-            result = subprocess.run(
-                cmd,
-                env=env,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                detail = (result.stderr or "").strip() or (result.stdout or "").strip()
-                raise RuntimeError(detail or f"Command failed: {' '.join(cmd)}")
+            reset_path = tmpdir_path / "reset.sql"
+            reset_sql = """
+SET LOCAL lock_timeout = '30s';
+DO $$ DECLARE item record; BEGIN
+    FOR item IN SELECT nspname FROM pg_namespace
+        WHERE nspname NOT LIKE 'pg_%' AND nspname <> 'information_schema'
+    LOOP EXECUTE format('DROP SCHEMA %I CASCADE', item.nspname); END LOOP;
+END $$;
+SELECT lo_unlink(oid) FROM pg_largeobject_metadata;
+"""
+            if not re.search(r"^\d+; \d+ \d+ SCHEMA - public(?:\s|$)", catalog, re.MULTILINE):
+                reset_sql += "CREATE SCHEMA public;\n"
+            reset_path.write_text(reset_sql, encoding="utf-8")
+            connections.close_all()
+            run_command([
+                "psql", "--no-psqlrc", "--single-transaction", "-v", "ON_ERROR_STOP=1",
+                "-h", db_host, "-p", db_port, "-U", db_user, "-d", db_name,
+                "-f", str(reset_path), "-f", str(sql_path),
+            ])
