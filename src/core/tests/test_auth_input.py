@@ -1,8 +1,10 @@
 from django.contrib.auth import get_user_model
-from django.core.cache import cache
+from django.core.cache import caches
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
 
+@override_settings(CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}, "security": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}})
 class AuthenticationInputTests(APITestCase):
     def test_invalid_json_shapes_return_validation_errors(self):
         for endpoint, payloads in (
@@ -11,12 +13,14 @@ class AuthenticationInputTests(APITestCase):
         ):
             for payload in payloads:
                 with self.subTest(endpoint=endpoint, payload_type=type(payload).__name__):
-                    cache.clear()
+                    caches["default"].clear()
+                    caches["security"].clear()
                     response = self.client.post(f"/api/auth/{endpoint}/", payload, format="json")
                     self.assertEqual(response.status_code, 400)
 
     def test_valid_login_preserves_password_whitespace_and_session(self):
-        cache.clear()
+        caches["default"].clear()
+        caches["security"].clear()
         password = "  Valid-Password-8472!  "
         get_user_model().objects.create_user(username="valid-login", password=password)
         response = self.client.post("/api/auth/login/", {"username": "valid-login", "password": password}, format="json")

@@ -107,6 +107,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "core.auth_throttling.AdminLoginThrottleMiddleware",
 ]
 
 _default_frontend_origins = "http://localhost:5173,http://127.0.0.1:5173" if DEBUG else ""
@@ -216,6 +217,20 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+}
+
+DOKO_TRUSTED_PROXY_CIDRS = [value.strip() for value in os.getenv("DOKO_TRUSTED_PROXY_CIDRS", "").split(",") if value.strip()]
+DOKO_AUTH_LOGIN_PER_MINUTE = max(1, int(os.getenv("DOKO_AUTH_LOGIN_PER_MINUTE", "10")))
+DOKO_AUTH_RESET_PER_MINUTE = max(1, int(os.getenv("DOKO_AUTH_RESET_PER_MINUTE", "5")))
+DOKO_AUTH_IP_PER_MINUTE = max(1, int(os.getenv("DOKO_AUTH_IP_PER_MINUTE", "300")))
+CACHES = {
+    "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},
+    "security": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.getenv("DOKO_RATE_LIMIT_CACHE_URL", CELERY_BROKER_URL),
+        "KEY_PREFIX": "doko-security",
+        "OPTIONS": {"socket_connect_timeout": 1, "socket_timeout": 1},
+    },
 }
 
 REST_KNOX = {

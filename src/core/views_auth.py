@@ -26,24 +26,16 @@ from rest_framework import permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.throttling import AnonRateThrottle
 from rest_framework.exceptions import ValidationError
 
 from .models import AuditLog
 from .audit import sanitize_audit_metadata
+from .auth_throttling import AuthRateThrottle, PasswordResetRateThrottle
 
 
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
-
-
-class AuthRateThrottle(AnonRateThrottle):
-    rate = "10/minute"
-
-
-class PasswordResetRateThrottle(AnonRateThrottle):
-    rate = "5/minute"
 
 
 def get_client_ip(request) -> str:
