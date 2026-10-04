@@ -175,11 +175,11 @@ Login attempts are limited per account across the API and Django administration 
 | `DOKO_AUTH_IP_PER_MINUTE` | `300` | Combined authentication attempts per client address per minute. |
 | `DOKO_TRUSTED_PROXY_CIDRS` | Empty | Comma-separated IP addresses or CIDRs of trusted incoming proxies. |
 | `DOKO_CHAT_PROMPTS_PER_MINUTE` | `20` | Interactive Catbot prompts per user in a rolling minute. |
-| `DOKO_CHAT_MAX_CONCURRENT` | `4` | Queued or running interactive Catbot prompts per user, across conversations. |
+| `DOKO_CHAT_MAX_CONCURRENT` | `4` | Simultaneous interactive Catbot generations per user, across conversations. Extra accepted prompts wait in the worker queue. |
 
 These settings do not change the outbound proxy configured on this page. Without trusted proxy networks, authentication limits use the direct peer address and ignore `X-Forwarded-For`. Behind an Ingress or reverse proxy, configure only the actual trusted proxy networks and ensure the proxy sanitizes or appends the real client address. Do not trust every address (`0.0.0.0/0` or `::/0`). Size the combined address budget for deployments where many users share the same peer address. Authentication limits use fixed one-minute windows; HTTP 429 responses include a retry delay.
 
-Interactive Catbot limits do not apply to automation rules or SOAR commands. Reading results, cancelling a request and copying a result into a comment draft do not consume prompt budget. No new database migration is required for these limits.
+Interactive Catbot limits do not apply to automation rules or configured SOAR commands. Reading results, cancelling a request and copying a result into a comment draft do not consume prompt budget. Clearing a conversation does not reset the rate limit. PostgreSQL releases generation slots when a worker disconnects, including after abnormal termination. Rate counters use the existing Redis broker; interactive submissions return HTTP 503 if that counter cannot be reached. No new database migration is required for these limits.
 
 The initial administrator uses `DOKO_ADMIN_USERNAME` and `DOKO_ADMIN_EMAIL`. `DOKO_ADMIN_PASSWORD` is optional. When it is absent, Doko generates a strong password and prints it once in the web service logs under `DOKO INITIAL SUPERUSER CREATED`.
 
