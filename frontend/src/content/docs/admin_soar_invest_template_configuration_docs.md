@@ -145,6 +145,18 @@ Disable it when the endpoint is unavailable or when the provider should no longe
 
 ## SOAR Provider
 
+### Request destination safety
+
+HTTP and internal services remain supported. A rendered request URL must use the provider's origin (scheme, hostname and port), an explicitly configured literal endpoint, or an origin listed in the provider request configuration's `allowed_origins` array. Fixed multi-host templates continue to work. A fully dynamic URL targeting a different service requires that service to be explicitly allowed, for example:
+
+```json
+{"allowed_origins": ["https://results.example.net:8443"]}
+```
+
+Add this property to the existing provider request configuration; do not replace its other properties. Paths and query strings are not origins. Credentials in URL authority, non-HTTP protocols and redirects are not supported. TLS verification settings and the outbound proxy remain unchanged.
+
+Template markers are expanded once. Text supplied by an alert, user or remote result is not reinterpreted as another marker, so a literal `{api_key}` inside such text does not reveal the provider's secret. Markers intentionally present in the configured template still work, including typed JSON substitutions.
+
 A SOAR provider defines how Doko reaches a remote automation platform.
 
 Investigation templates are attached to a SOAR provider. The provider handles the connection, authentication, and timeout.
