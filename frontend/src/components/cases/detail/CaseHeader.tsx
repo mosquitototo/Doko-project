@@ -7,6 +7,7 @@ import OutcomeBadge from "../../ui/OutcomeBadge";
 import CustomerScopeBadge from "../../ui/CustomerScopeBadge";
 import { Activity, ArchiveButton, CancelButton, DeleteButton, Info, NotebookText, OpenCloseToggleButton, SaveButton, UserRound, Workflow, LeftButton } from "../../ui/IconButton";
 import { generateCaseReport } from "../../../api/caseReports";
+import { resolveMediaUrl } from "../../../utils/mediaUrl";
 import { updateTicket } from "../../../api/cases";
 import type { CaseDetail } from "../../../api/caseDetail";
 import type { UserLite } from "../../../api/usersLite";
@@ -387,7 +388,7 @@ export default function CaseHeader(props: Props) {
                 props.setReportBusy(true);
                 try {
                   const rep = await generateCaseReport(props.ticketId, props.reportTplId);
-                  if ((rep as any).pdf_url) window.open((rep as any).pdf_url, "_blank", "noopener,noreferrer");
+                  if ((rep as any).pdf_url) window.open(resolveMediaUrl((rep as any).pdf_url), "_blank", "noopener,noreferrer");
                   props.push({ kind: "success", title: "Report generated" });
                 } catch (e: any) {
                   props.push({ kind: "error", title: "Error", message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network") });

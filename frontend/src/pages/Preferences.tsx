@@ -3,6 +3,7 @@ import Card from "../components/ui/Card";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import { useUiAccess } from "../hooks/useUiAccess";
 import { useMe, useReloadMe } from "../contexts/MeContext";
+import { resolveMediaUrl } from "../utils/mediaUrl";
 import {
   updateMe,
   changePassword,
@@ -593,7 +594,7 @@ export default function Preferences() {
               <div className="relative h-28 w-28 overflow-hidden rounded-[28px] border border-border bg-background shadow-panel transition group-hover:scale-[1.02]">
                 {me.avatar_url ? (
                   <img
-                    src={me.avatar_url}
+                    src={resolveMediaUrl(me.avatar_url)}
                     alt="avatar"
                     className="h-full w-full object-cover"
                   />

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { resolveMediaUrl } from "../../utils/mediaUrl";
 
 type Props = {
   src?: string | null;
@@ -21,7 +22,7 @@ export default function UserAvatar({ src, name, size = "small" }: Props) {
     >
       {showImage ? (
         <img
-          src={src!}
+          src={resolveMediaUrl(src!)}
           alt=""
           loading="lazy"
           className="h-full w-full object-cover"

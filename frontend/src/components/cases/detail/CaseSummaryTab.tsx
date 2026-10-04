@@ -7,6 +7,7 @@ import { CancelButton, DeleteButton, EditGenButton, NewGenButton, OpenGenButton,
 import type { Attachment, Comment, LinkedAlert, LinkedTask, WorkbookInstance } from "../../../api/caseDetail";
 import type { WorkbookTemplate } from "../../../api/settingsWorkbooks";
 import { formatDate, isRichTextEmpty } from "./utils";
+import { resolveMediaUrl } from "../../../utils/mediaUrl";
 
 
 
@@ -421,7 +422,7 @@ export default function CaseSummaryTab(props: Props) {
                             title="Open attachment"
                             disabled={props.busy}
                             onClick={() => {
-                              window.open((a as any).file_url, "_blank", "noopener,noreferrer");
+                              window.open(resolveMediaUrl((a as any).file_url), "_blank", "noopener,noreferrer");
                             }}
                           />
                         ) : null}

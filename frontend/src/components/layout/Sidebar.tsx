@@ -6,6 +6,7 @@ import { clearToken } from "../../auth/auth";
 import { useToast } from "../ui/toast";
 import { useTheme } from "../theme/ThemeProvider";
 import { DOKO_RELEASES_URL, DOKO_VERSION } from "../../config/version";
+import { resolveMediaUrl } from "../../utils/mediaUrl";
 import {
   Siren,
   Binoculars,
@@ -245,7 +246,7 @@ export default function Sidebar({
         <div className="flex items-center justify-center gap-3 lg:justify-start">
           {me?.avatar_url ? (
             <img
-              src={me.avatar_url}
+              src={resolveMediaUrl(me.avatar_url)}
               alt="avatar"
               className="h-10 w-10 rounded-2xl border border-border object-cover lg:h-11 lg:w-11"
             />
