@@ -74,7 +74,7 @@ def _minimize_context(value, depth=0):
     if isinstance(value, (list, tuple)):
         return [_minimize_context(item, depth + 1) for item in value[:50]]
     if isinstance(value, str):
-        return value[:4000]
+        return value[:50000]
     return value
 
 def _model_field_names(model) -> set[str]:

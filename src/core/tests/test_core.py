@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.test import SimpleTestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
@@ -16,7 +17,7 @@ from core.rbac import get_permitted_customer_ids, user_has_perm
 from core.serializers_chat import ChatSessionSerializer
 from core.serializers_settings import AutomationRuleSerializer, RoleSerializer
 from core.services_automation import AutomationContext, evaluate_rule_conditions, run_automation_rules_for_event
-from core.services_chat_context import ChatContextRequest, build_chat_context_snapshot
+from core.services_chat_context import ChatContextRequest, build_chat_context_snapshot, _minimize_context
 from core.services_chat_posting import post_generated_draft, user_has_draft_target_permission
 from core.services_chat import _build_recent_conversation_history, _format_prompt, _wait_for_action_completion, execute_chat_run
 from core.services_llm import LLMService
@@ -25,6 +26,20 @@ from core.services_splunk_hec import build_audit_log_hec_payload, send_payload_t
 
 
 User = get_user_model()
+
+
+class ChatContextTextLimitTests(SimpleTestCase):
+    def test_context_preserves_text_up_to_50000_characters(self):
+        for size in (4001, 49999, 50000):
+            with self.subTest(size=size):
+                text = "é" * size
+                self.assertEqual(_minimize_context({"description": text}), {"description": text})
+
+    def test_context_truncates_longer_text_and_still_redacts_secrets(self):
+        result = _minimize_context({"description": "a" * 50000 + "end", "token": "private"})
+        self.assertEqual(result["description"], "a" * 50000)
+        self.assertEqual(result["token"], "[redacted]")
+        self.assertEqual(len(_minimize_context(list(range(60)))), 50)
 
 
 class DokoSecurityAndFunctionTests(APITestCase):
