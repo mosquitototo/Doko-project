@@ -27,6 +27,7 @@ share/python-wheels/
 MANIFEST
 
 # Docker / runtime local
+/docker-compose.vite.yml
 src/media/
 src/staticfiles/
 src/celerybeat/

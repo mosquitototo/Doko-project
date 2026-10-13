@@ -663,9 +663,19 @@ class ChatSessionSerializer(serializers.ModelSerializer):
     messages = serializers.SerializerMethodField()
     active_run = serializers.SerializerMethodField()
 
+    def get_fields(self):
+        fields = super().get_fields()
+        if self.context.get("summary_only"):
+            fields.pop("messages", None)
+            fields.pop("active_run", None)
+        return fields
+
     def get_messages(self, obj):
-        messages = list(obj.messages.order_by("-created_at")[:100])
-        messages.reverse()
+        if "messages_page" in self.context:
+            messages = self.context["messages_page"]
+        else:
+            messages = list(obj.messages.order_by("-created_at")[:100])
+            messages.reverse()
 
         run_ids = {
             str((message.metadata or {}).get("run_id") or "")

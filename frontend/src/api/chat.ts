@@ -12,6 +12,7 @@ export type ChatSession = {
   created_at: string;
   updated_at: string;
   messages?: ChatMessage[];
+  older_cursor?: string | null;
   active_run?: ChatRun | null;
 };
 
@@ -161,6 +162,27 @@ function unwrapList<T>(data: unknown): T[] {
 export async function listChatSessions(): Promise<ChatSession[]> {
   const { data } = await api.get("/api/chat/sessions");
   return unwrapList<ChatSession>(data);
+}
+
+export async function listDedicatedChatSessions(offset = 0): Promise<{ results: ChatSession[]; next_offset: number | null }> {
+  const { data } = await api.get("/api/chat/sessions", { params: { surface: "dedicated", offset } });
+  return data;
+}
+
+export async function fetchChatSession(sessionId: string, before?: string): Promise<ChatSession> {
+  const { data } = await api.get(`/api/chat/sessions/${sessionId}`, { params: before ? { before } : undefined });
+  return data;
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  const csrfToken = await ensureCsrf();
+  await api.delete(`/api/chat/sessions/${sessionId}`, { headers: { "X-CSRFToken": csrfToken } });
+}
+
+export async function renameChatSession(sessionId: string, title: string): Promise<Pick<ChatSession, "id" | "title">> {
+  const csrfToken = await ensureCsrf();
+  const { data } = await api.patch(`/api/chat/sessions/${sessionId}`, { title }, { headers: { "X-CSRFToken": csrfToken } });
+  return data;
 }
 
 export async function createChatSession(payload: {

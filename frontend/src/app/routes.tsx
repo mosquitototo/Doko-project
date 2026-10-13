@@ -105,6 +105,7 @@ export const router = createBrowserRouter([
           { path: "hunts/:id", element: <RequirePerm any={["hunt.view"]}><HuntDetailPage /></RequirePerm> },
 
           { path: "chatbot", element: <RequirePerm any={["chat.use"]}><ChatbotPage /></RequirePerm> },
+          { path: "catbot", element: <RequirePerm any={["chat.use"]}><ChatbotPage /></RequirePerm> },
 
           { path: "settings/ai-soar", element: <RequirePerm any={["settings.chat.view", "settings.chat.manage", "chat.template.manage"]}><AIAndSOARSettingsPage /></RequirePerm> },
 

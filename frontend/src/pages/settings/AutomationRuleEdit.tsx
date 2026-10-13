@@ -1272,9 +1272,7 @@ export default function AutomationRuleEdit() {
 
       push({ kind: "success", title: "Automation rule saved" });
 
-      if (isNew) {
-        navigate("/settings/case-management");
-      }
+      navigate("/settings/case-management");
     } catch (e: any) {
       push({
         kind: "error",

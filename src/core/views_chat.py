@@ -5,7 +5,8 @@ from rest_framework.views import APIView
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Q
+from uuid import UUID
 from django.utils import timezone
 
 from .models import ChatGeneratedDraft, ChatRun, ChatSession, InvestigationTemplate
@@ -46,6 +47,16 @@ class ChatSessionListCreateView(APIView):
     def get(self, request):
         if not user_has_perm(request.user, "chat.use"):
             return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
+        if request.query_params.get("surface") == "dedicated":
+            try:
+                offset = max(0, int(request.query_params.get("offset", 0)))
+            except (ValueError, TypeError):
+                return Response({"detail": "Invalid offset"}, status=status.HTTP_400_BAD_REQUEST)
+            items = list(ChatSession.objects.filter(user=request.user, surface="dedicated", is_archived=False).order_by("-updated_at", "-id")[offset:offset + 51])
+            return Response({
+                "results": ChatSessionSerializer(items[:50], many=True, context={"summary_only": True}).data,
+                "next_offset": offset + 50 if len(items) > 50 else None,
+            })
         qs = (
             ChatSession.objects.filter(user=request.user, is_archived=False)
             .prefetch_related(
@@ -82,6 +93,59 @@ class ChatSessionListCreateView(APIView):
             client_tab_id=client_tab_id,
         )
         return Response(ChatSessionSerializer(session).data, status=status.HTTP_201_CREATED)
+
+
+class ChatSessionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def patch(self, request, session_id):
+        if not user_has_perm(request.user, "chat.use"):
+            return _forbidden()
+        session = ChatSession.objects.select_for_update().filter(pk=session_id, user=request.user, surface="dedicated", is_archived=False).first()
+        if not session:
+            return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+        title = request.data.get("title")
+        if not isinstance(title, str) or not title.strip() or len(title.strip()) > 255:
+            return Response({"detail": "Title must contain between 1 and 255 characters."}, status=status.HTTP_400_BAD_REQUEST)
+        session.title = title.strip()
+        session.save(update_fields=["title"])
+        return Response({"id": str(session.id), "title": session.title})
+
+    def get(self, request, session_id):
+        if not user_has_perm(request.user, "chat.use"):
+            return _forbidden()
+        session = ChatSession.objects.filter(pk=session_id, user=request.user, surface="dedicated", is_archived=False).first()
+        if not session:
+            return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+        session.active_chat_runs = list(session.runs.filter(status__in=["queued", "running"]).order_by("-created_at")[:1])
+        messages = session.messages.order_by("-created_at", "-id")
+        before = request.query_params.get("before")
+        if before:
+            try:
+                cursor = session.messages.filter(pk=UUID(before)).first()
+            except (ValueError, TypeError):
+                cursor = None
+            if cursor is None:
+                return Response({"detail": "Invalid message cursor"}, status=status.HTTP_400_BAD_REQUEST)
+            messages = messages.filter(Q(created_at__lt=cursor.created_at) | Q(created_at=cursor.created_at, id__lt=cursor.id))
+        page = list(messages[:101])
+        data = dict(ChatSessionSerializer(session, context={"messages_page": list(reversed(page[:100]))}).data)
+        data["older_cursor"] = str(page[99].id) if len(page) > 100 else None
+        return Response(data)
+
+    @transaction.atomic
+    def delete(self, request, session_id):
+        if not user_has_perm(request.user, "chat.use"):
+            return _forbidden()
+        session = ChatSession.objects.select_for_update().filter(pk=session_id, user=request.user, surface="dedicated", is_archived=False).first()
+        if not session:
+            return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+        if session.runs.filter(status__in=["queued", "running"]).exists():
+            return Response({"detail": "Wait for the current response to finish or cancel it before deleting this conversation."}, status=status.HTTP_409_CONFLICT)
+        session.runs.all().delete()
+        session.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ChatSessionArchiveView(APIView):
@@ -211,21 +275,24 @@ class ChatRunCreateView(APIView):
             or ((chat_command or parsed_command) and templates.filter(chat_command=(chat_command or parsed_command).lower()).exists())
         )
         create_run = create_chat_run if known_command else _create_limited_prompt_run
-        run = create_run(
-            user=request.user,
-            session=session,
-            request_id=request_id,
-            client_tab_id=client_tab_id,
-            page_type=request.data.get("page_type") or session.page_type,
-            object_id=request.data.get("object_id") or session.object_id,
-            current_tab=request.data.get("current_tab") or "",
-            inclusions=request.data.get("inclusions") or [],
-            customer_id=customer_id,
-            message=message,
-            template_code=template_code or None,
-            chat_command=chat_command or None,
-            variables=request.data.get("variables") or None,
-        )
+        try:
+            run = create_run(
+                user=request.user,
+                session=session,
+                request_id=request_id,
+                client_tab_id=client_tab_id,
+                page_type=request.data.get("page_type") or session.page_type,
+                object_id=request.data.get("object_id") or session.object_id,
+                current_tab=request.data.get("current_tab") or "",
+                inclusions=request.data.get("inclusions") or [],
+                customer_id=customer_id,
+                message=message,
+                template_code=template_code or None,
+                chat_command=chat_command or None,
+                variables=request.data.get("variables") or None,
+            )
+        except ChatSession.DoesNotExist:
+            return Response({"detail": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             task = execute_chat_run_task.delay(str(run.id))

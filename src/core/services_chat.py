@@ -1044,6 +1044,11 @@ def create_chat_run(
     chat_command: str | None = None,
     variables: dict | None = None,
 ) -> ChatRun:
+    if session.surface == "dedicated":
+        session = ChatSession.objects.select_for_update().get(pk=session.pk, user=user, is_archived=False)
+        if session.title in ("", "New chat") and not session.messages.exists():
+            session.title = " ".join(message.split())[:80]
+        session.save(update_fields=["title", "updated_at"])
     snapshot_payload = build_chat_context_snapshot(
         ChatContextRequest(
             user=user,
@@ -1392,11 +1397,6 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
 
         run = _refresh_run_or_raise_cancelled(run)
 
-        run.response_text = answer
-        run.status = "completed"
-        run.completed_at = timezone.now()
-        run.save(update_fields=["response_text", "status", "completed_at", "updated_at"])
-
         message_metadata = {
             "run_id": str(run.id),
             "request_id": run.request_id,
@@ -1409,14 +1409,18 @@ def execute_chat_run(run: ChatRun) -> ChatRun:
         }:
             message_metadata["read_operation"] = read_plan
 
-        ChatMessage.objects.create(
-            session=run.session,
-            role="assistant",
-            content=answer,
-            metadata=message_metadata,
-        )
-
-        _set_run_progress(run, label="Completed", preview=strip_tags(answer or "")[:2000])
+        with transaction.atomic():
+            run.response_text = answer
+            run.status = "completed"
+            run.completed_at = timezone.now()
+            run.save(update_fields=["response_text", "status", "completed_at", "updated_at"])
+            ChatMessage.objects.create(
+                session=run.session,
+                role="assistant",
+                content=answer,
+                metadata=message_metadata,
+            )
+            _set_run_progress(run, label="Completed", preview=strip_tags(answer or "")[:2000])
 
         return run
 

@@ -139,6 +139,7 @@ from .views_auth import (
 
 from .views_chat import (
     ChatSessionListCreateView,
+    ChatSessionDetailView,
     ChatSessionClearView,
     ChatRunCreateView,
     ChatRunDetailView,
@@ -286,6 +287,7 @@ urlpatterns = [
     path("settings/ai/investigation-templates/<uuid:pk>", InvestigationTemplateDetailView.as_view()),
 
     path("chat/sessions", ChatSessionListCreateView.as_view()),
+    path("chat/sessions/<uuid:session_id>", ChatSessionDetailView.as_view()),
     path("chat/sessions/<uuid:session_id>/runs", ChatRunCreateView.as_view()),
     path("chat/runs/<uuid:run_id>", ChatRunDetailView.as_view()),
     path("chat/runs/<uuid:run_id>/drafts", ChatGenerateDraftView.as_view()),

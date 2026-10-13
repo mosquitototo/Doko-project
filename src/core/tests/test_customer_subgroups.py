@@ -18,6 +18,53 @@ class CustomerSubgroupTests(APITestCase):
         self.alert = Alert.objects.create(customer=self.customer, title="Subgroup alert")
         self.case = Case.objects.create(customer=self.customer, title="Subgroup case")
 
+    def test_merge_into_new_case_unions_matching_subgroups(self):
+        self.alert.subgroups.add(self.group)
+        second = Alert.objects.create(customer=self.customer, title="Second")
+        second.subgroups.add(self.group, self.group2)
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/escalate/", {"alert_ids": [str(second.pk)]}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.alert.refresh_from_db()
+        self.assertEqual(self.alert.case.customer_id, self.customer.pk)
+        self.assertSetEqual(set(self.alert.case.subgroups.all()), {self.group, self.group2})
+
+    def test_merge_existing_preserves_groups_and_supports_repeated_link(self):
+        self.case.subgroups.add(self.group2)
+        self.alert.subgroups.add(self.group)
+        for _ in range(2):
+            response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", {"case_id": str(self.case.pk)}, format="json")
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertSetEqual(set(self.case.subgroups.all()), {self.group, self.group2})
+
+    def test_merge_without_customer_inherits_customer_and_subgroups(self):
+        self.case.customer = None
+        self.case.save(update_fields=["customer"])
+        self.alert.subgroups.add(self.group)
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", {"case_id": str(self.case.pk)}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.case.refresh_from_db()
+        self.assertEqual(self.case.customer_id, self.customer.pk)
+        self.assertSetEqual(set(self.case.subgroups.all()), {self.group})
+
+    def test_merge_foreign_customer_is_still_rejected(self):
+        self.case.customer = self.other
+        self.case.save(update_fields=["customer"])
+        self.case.subgroups.add(self.foreign)
+        self.alert.subgroups.add(self.group)
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", {"case_id": str(self.case.pk)}, format="json")
+        self.assertEqual(response.status_code, 409, response.data)
+        self.assertSetEqual(set(self.case.subgroups.all()), {self.foreign})
+
+    def test_new_case_with_mixed_customers_has_no_subgroups(self):
+        self.alert.subgroups.add(self.group)
+        other = Alert.objects.create(customer=self.other, title="Other")
+        other.subgroups.add(self.foreign)
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/escalate/", {"alert_ids": [str(other.pk)]}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.alert.refresh_from_db()
+        self.assertIsNone(self.alert.case.customer_id)
+        self.assertFalse(self.alert.case.subgroups.exists())
+
     def test_customer_nested_crud_preserves_omitted_groups_and_sla(self):
         url = f"/api/settings/customers/{self.customer.pk}/"
         response = self.client.patch(url, {"subgroups": [{"id": str(self.group.pk), "name": "Renamed", "description": "Scope", "contacts": [{"name": "Contact", "email": "contact@example.org"}]}]}, format="json")

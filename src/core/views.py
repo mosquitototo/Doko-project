@@ -188,6 +188,11 @@ def _get_alerts_for_new_case_merge(request, base_alert: Alert):
     return alerts
 
 
+def _add_alert_subgroups_to_case(case, alert):
+    if case.customer_id and case.customer_id == alert.customer_id:
+        case.subgroups.add(*alert.subgroups.filter(customer_id=case.customer_id))
+
+
 def _join_alert_descriptions(alerts: list[Alert]) -> str:
     parts = []
 
@@ -1105,6 +1110,7 @@ class AlertEscalateToCaseView(APIView):
             created_exchange_count = 0
 
             for idx, alert in enumerate(alerts):
+                _add_alert_subgroups_to_case(case, alert)
                 previous_status = _alert_status_before_merge(alert)
                 before_alert = _alert_automation_snapshot(alert)
                 update_fields = ["case", "status", "status_before_merge"]
@@ -1237,6 +1243,7 @@ class AlertLinkToCaseView(APIView):
             case_sources_before = _case_alert_sources_for_automation(case)
 
             if alert.case_id == case.id:
+                _add_alert_subgroups_to_case(case, alert)
                 alert_changed = False
                 if alert.status != Alert.Status.MERGED:
                     alert.status_before_merge = _alert_status_before_merge(alert)
@@ -1330,6 +1337,7 @@ class AlertLinkToCaseView(APIView):
             alert.status_before_merge = previous_status
             alert.status = Alert.Status.MERGED
             alert.save(update_fields=alert_update_fields)
+            _add_alert_subgroups_to_case(case, alert)
             after_alert = _alert_automation_snapshot(alert)
 
             created_exchange_count = _materialize_alert_case_exchanges(

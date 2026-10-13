@@ -12,6 +12,7 @@ function ShellLayout() {
   const [loading, setLoading] = useState(true);
   const [authFailed, setAuthFailed] = useState(false);
   const location = useLocation();
+  const isCatbotPage = ["/catbot", "/chatbot"].includes(location.pathname.replace(/\/$/, ""));
   const [chatOpen, setChatOpen] = useState(false);
   const [chatLoaded, setChatLoaded] = useState(false);
 
@@ -47,7 +48,7 @@ function ShellLayout() {
 
   return (
     <MeContext.Provider value={{ me, reloadMe }}>
-      <div className="flex h-screen w-full overflow-hidden bg-app text-app">
+      <div className={`flex ${isCatbotPage ? "h-dvh" : "h-screen"} w-full overflow-hidden bg-app text-app`}>
         <Sidebar
           me={me}
           onOpenGlobalChat={() => {
@@ -61,8 +62,8 @@ function ShellLayout() {
         />
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3 sm:p-4 lg:p-6">
-            <div className="mx-auto w-full max-w-[1800px] min-w-0">
+          <main className={`min-w-0 flex-1 p-3 sm:p-4 lg:p-6 ${isCatbotPage ? "min-h-0 overflow-hidden" : "overflow-x-hidden overflow-y-auto"}`}>
+            <div className={`mx-auto w-full max-w-[1800px] min-w-0 ${isCatbotPage ? "h-full min-h-0" : ""}`}>
               <Outlet />
             </div>
           </main>
