@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone as dt_timezone
+from datetime import date, datetime, time, timedelta, timezone as dt_timezone
 from uuid import UUID
 from urllib.parse import urlparse
 from pathlib import PurePath
@@ -11,7 +11,7 @@ from django.contrib.auth import get_user_model, update_session_auth_hash
 from django.shortcuts import get_object_or_404
 from django.db.models import Case as DbCase, When, Value, IntegerField, Max, OuterRef, Subquery, DateTimeField, CharField, BooleanField, Q, F, Count
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import localtime
 from django.db.models.functions import Coalesce, Greatest
 from django.db import transaction, IntegrityError
@@ -849,6 +849,23 @@ class UserLiteListView(generics.ListAPIView):
 ###############
 ### Alerts
 ###############
+def _filter_created_range(qs, params):
+    start_raw = (params.get("created_from") or "").strip()
+    end_raw = (params.get("created_to") or "").strip()
+    if not start_raw and not end_raw:
+        return qs
+    try:
+        start = parse_date(start_raw)
+        end = parse_date(end_raw)
+        if start is None or end is None or start > end:
+            raise ValueError
+        start_at = timezone.make_aware(datetime.combine(start, time.min))
+        end_at = timezone.make_aware(datetime.combine(end + timedelta(days=1), time.min))
+    except (ValueError, OverflowError):
+        raise ValidationError({"created_from": "Provide a valid start and end date (YYYY-MM-DD), with start before or equal to end."})
+    return qs.filter(created_at__gte=start_at, created_at__lt=end_at)
+
+
 class AlertListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     serializer_class = AlertSerializer
@@ -872,6 +889,7 @@ class AlertListCreateView(generics.ListCreateAPIView):
             customer_ids = get_permitted_customer_ids(user, self.required_permission)
             qs = qs.filter(customer_id__in=customer_ids)
 
+        qs = _filter_created_range(qs, self.request.query_params)
         created_after_raw = (self.request.query_params.get("created_after") or "").strip()
         if created_after_raw:
             created_after = parse_datetime(created_after_raw)
@@ -1966,6 +1984,8 @@ class CaseListCreateView(generics.ListCreateAPIView):
                 output_field=BooleanField(),
             ),
         )
+
+        qs = _filter_created_range(qs, self.request.query_params)
 
         def _get_list(param_name: str):
             vals = self.request.query_params.getlist(param_name)

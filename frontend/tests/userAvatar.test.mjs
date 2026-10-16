@@ -23,6 +23,10 @@ test("list avatars retain owner labels without visible names and provide an empt
     assert.match(render({}), /title="Unassigned"/);
     assert.match(render({}), /<svg/);
     assert.doesNotMatch(picture, /<svg/);
+    const initial = render({ name: "alice", showInitial: true });
+    assert.match(initial, />A</);
+    assert.match(initial, /h-7 w-7/);
+    assert.match(render({ showInitial: true }), /<svg/);
   } finally {
     await server.close();
   }

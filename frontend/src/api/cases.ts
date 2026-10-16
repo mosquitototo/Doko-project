@@ -56,6 +56,8 @@ export async function fetchTickets(params: {
   outcome?: string | string[];
   include_archived?: string;
   archived_only?: string;
+  created_from?: string;
+  created_to?: string;
 }): Promise<Paginated<CaseListItem>> {
   const sp = new URLSearchParams();
 
@@ -83,6 +85,8 @@ export async function fetchTickets(params: {
   addMulti("customer", params.customer);
   addMulti("outcome", params.outcome);
   add("archived_only", params.archived_only);
+  add("created_from", params.created_from);
+  add("created_to", params.created_to);
 
   const res = await api.get(`/api/cases/?${sp.toString()}`);
   return res.data;

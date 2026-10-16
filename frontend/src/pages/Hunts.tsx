@@ -400,7 +400,7 @@ export default function HuntsPage() {
         : null}
 
       <Card className="relative z-20 overflow-visible p-5">
-        <div className="flex items-start justify-between gap-3">
+        <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(v => !v)} className="flex w-full cursor-pointer items-start justify-between gap-3 border-none bg-transparent p-0 text-left">
           <div className="flex items-center gap-2">
             <div className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border bg-background text-muted-foreground">
               <SlidersHorizontal className="h-4 w-4" />
@@ -410,14 +410,12 @@ export default function HuntsPage() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
+          <span
             className="rounded-2xl border cursor-pointer border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition hover:bg-accent"
           >
             {filtersOpen ? "Collapse" : "Expand"}
-          </button>
-        </div>
+          </span>
+        </button>
 
         {filtersOpen ? (
           <div className="mt-4 grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">

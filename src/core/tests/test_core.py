@@ -1,5 +1,7 @@
 import json
 import threading
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
@@ -62,6 +64,44 @@ class DokoSecurityAndFunctionTests(APITestCase):
 
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
+
+    def test_created_date_range_includes_whole_days_and_preserves_customer_scope(self):
+        self.grant(self.user_a, self.customer_a, "alert.view", "case.view")
+        self.authenticate(self.user_a)
+        with timezone.override("Europe/Paris"):
+            for model, collection in ((Alert, "alerts"), (Case, "cases")):
+                expected = []
+                for index, stamp in enumerate((
+                    "2026-10-24T23:59:59.999999", "2026-10-25T00:00:00",
+                    "2026-10-25T23:59:59.999999", "2026-10-26T00:00:00",
+                )):
+                    item = model.objects.create(title=f"Range {index}", customer=self.customer_a)
+                    model.objects.filter(pk=item.pk).update(created_at=datetime.fromisoformat(stamp).replace(tzinfo=ZoneInfo("Europe/Paris")))
+                    if index in (1, 2):
+                        expected.append(str(item.pk))
+                hidden = model.objects.create(title="Hidden", customer=self.customer_b)
+                model.objects.filter(pk=hidden.pk).update(created_at=datetime(2026, 10, 25, 12, tzinfo=ZoneInfo("Europe/Paris")))
+                params = {"created_from": "2026-10-25", "created_to": "2026-10-25", "ordering": "created_at", "page_size": 1}
+                response = self.client.get(f"/api/{collection}/", params)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data["count"], 2)
+                self.assertEqual(str(response.data["results"][0]["id"]), expected[0])
+                second = self.client.get(f"/api/{collection}/", {**params, "page": 2})
+                self.assertEqual(str(second.data["results"][0]["id"]), expected[1])
+                self.assertEqual(self.client.get(f"/api/{collection}/").data["count"], 4)
+
+    def test_created_date_range_rejects_invalid_or_incomplete_ranges(self):
+        self.grant(self.user_a, self.customer_a, "alert.view", "case.view")
+        self.authenticate(self.user_a)
+        for collection in ("alerts", "cases"):
+            for params in (
+                {"created_from": "2026-09-23", "created_to": "2026-09-22"},
+                {"created_from": "2026-02-30", "created_to": "2026-03-01"},
+                {"created_from": "invalid", "created_to": "2026-03-01"},
+                {"created_from": "2026-09-22"},
+            ):
+                with self.subTest(collection=collection, params=params):
+                    self.assertEqual(self.client.get(f"/api/{collection}/", params).status_code, 400)
 
     def test_case_create_read_update_and_hard_delete(self):
         self.grant(self.user_a, self.customer_a, "case.add", "case.view", "case.update", "case.delete")

@@ -5,6 +5,9 @@ import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
 import ClassificationBadge from "../components/ui/ClassificationBadge";
 import OutcomeBadge from "../components/ui/OutcomeBadge";
+import InlineEditableBadge from "../components/ui/InlineEditableBadge";
+import MarkdownRenderedContent from "../components/ui/MarkdownRenderedContent";
+import { ArrowUpRight, Eye } from "lucide-react";
 import { fetchAlerts, updateAlert, type AlertListItem } from "../api/alerts";
 import { useToast } from "../components/ui/toast";
 import {
@@ -55,23 +58,6 @@ function formatDate(iso: string) {
   } catch {
     return iso;
   }
-}
-
-function htmlToPlainText(html?: string | null) {
-  if (!html) return "";
-  if (typeof document === "undefined") {
-    return String(html).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-  }
-  const el = document.createElement("div");
-  el.innerHTML = html;
-  return (el.textContent || el.innerText || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function clampLines(text: string) {
-  return text || "—";
 }
 
 function asArray<T>(v: any): T[] {
@@ -254,6 +240,9 @@ export default function Alerts() {
 
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const validCreatedRange = !!createdFrom && !!createdTo && createdFrom <= createdTo;
 
   const [customer, setCustomer] = useState<string[]>([]);
   const [status, setStatus] = useState<string[]>(["open","in_progress"]);
@@ -309,6 +298,8 @@ export default function Alerts() {
   }, []);
 
   const [editUI, setEditUI] = useState<{ ids: string[] } | null>(null);
+  const [previewAlert, setPreviewAlert] = useState<AlertListItem | null>(null);
+  const editInitial = useRef<Record<string, string>>({});
 
   const [editCustomer, setEditCustomer] = useState<string>("");
   const [editSeverity, setEditSeverity] = useState<string>("");
@@ -318,12 +309,27 @@ export default function Alerts() {
   const [editOutcome, setEditOutcome] = useState<string>("");
 
   function openEdit(ids: string[]) {
-    setEditCustomer("");
-    setEditSeverity("");
-    setEditClassification("");
-    setEditOwnerId("");
-    setEditStatus("");
-    setEditOutcome("");
+    const rows = itemsArr.filter(item => ids.includes(item.id));
+    const common = (read: (item: any) => unknown, empty = "") => {
+      if (!rows.length || rows.length !== ids.length) return "";
+      const values = rows.map(item => String(read(item) ?? empty));
+      return values.every(value => value === values[0]) ? values[0] : "";
+    };
+    const values = {
+      customer: common(item => item.customer, "__NULL__"),
+      severity: common(item => item.severity),
+      classification: common(item => item.classification),
+      owner: common(item => item.owner_id ?? item.owner, "__NULL__"),
+      status: common(item => item.case ? "merged" : item.status),
+      outcome: common(item => item.outcome ?? item.outcome_code ?? item.outcome_value),
+    };
+    editInitial.current = values;
+    setEditCustomer(values.customer);
+    setEditSeverity(values.severity);
+    setEditClassification(values.classification);
+    setEditOwnerId(values.owner);
+    setEditStatus(values.status);
+    setEditOutcome(values.outcome);
     setEditUI({ ids });
   }
 
@@ -465,6 +471,8 @@ export default function Alerts() {
 
   const alertScopeParams = useMemo(
     () => ({
+      created_from: validCreatedRange ? createdFrom : undefined,
+      created_to: validCreatedRange ? createdTo : undefined,
       search: search || undefined,
       customer,
       status,
@@ -474,6 +482,9 @@ export default function Alerts() {
       outcome,
     }),
     [
+      createdFrom,
+      createdTo,
+      validCreatedRange,
       search,
       customer,
       status,
@@ -526,6 +537,10 @@ export default function Alerts() {
       setServerCount(Number(data?.count ?? 0));
       return true;
     } catch (e: any) {
+      if (e?.response?.status === 404 && pageOverride > 1) {
+        setPage(pageOverride - 1);
+        return false;
+      }
       const msg = e?.response?.status
         ? `API error (${e.response.status})`
         : "Network error";
@@ -670,6 +685,21 @@ export default function Alerts() {
     });
   };
 
+  async function changeAlertField(id: string, field: "status" | "severity" | "outcome", value: string) {
+    if (!canUpdate || busyAction) return;
+    setBusyAction(true);
+    try {
+      await updateAlert(id, { [field]: value });
+      push({ kind: "success", title: "Alert updated" });
+      setSelected({});
+      await refreshAlertsPage();
+    } catch (e: any) {
+      push({ kind: "error", title: "Error", message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network") });
+    } finally {
+      setBusyAction(false);
+    }
+  }
+
   async function bulkSetStatus(nextStatus: "open" | "in_progress" | "closed") {
     if (!canUpdate || selectedIds.length === 0) return;
 
@@ -695,6 +725,7 @@ export default function Alerts() {
         )
       );
       setSelected({});
+      await refreshAlertsPage();
     } catch (e: any) {
       push({
         kind: "error",
@@ -823,7 +854,7 @@ export default function Alerts() {
 
   useEffect(() => {
     setSelected({});
-  }, [page, pageSize, search, customer, status, owner, severity, classification, outcome, ordering]);
+  }, [page, pageSize, search, customer, status, owner, severity, classification, outcome, ordering, createdFrom, createdTo]);
 
   const customerDropdownOptions = useMemo<MultiSelectComboboxOption[]>(
     () =>
@@ -887,6 +918,8 @@ export default function Alerts() {
   }
 
   const clearFilters = () => {
+    setCreatedFrom("");
+    setCreatedTo("");
     setPage(1);
     setCustomer([]);
     setStatus(["open","in_progress"]);
@@ -948,7 +981,7 @@ export default function Alerts() {
       </div>
 
       <Card className="relative z-20 overflow-visible p-5">
-        <div className="flex items-start justify-between gap-3">
+        <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(v => !v)} className="flex w-full cursor-pointer items-start justify-between gap-3 border-none bg-transparent p-0 text-left">
           <div className="flex items-center justify-center">
             <div className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border bg-background text-muted-foreground">
               <SlidersHorizontal className="h-4 w-4" />
@@ -958,14 +991,12 @@ export default function Alerts() {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
+          <span
             className="rounded-2xl border cursor-pointer border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition hover:bg-accent"
           >
             {filtersOpen ? "Collapse" : "Expand"}
-          </button>
-        </div>
+          </span>
+        </button>
 
         {filtersOpen ? (
           <div className="mt-4 grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
@@ -994,6 +1025,15 @@ export default function Alerts() {
                   onClick={clearFilters}
                 />
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Created between</span>
+              <input type="date" aria-label="Created from" value={createdFrom} onChange={(e) => { setPage(1); setCreatedFrom(e.target.value); }} className="h-10 rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none shadow-sm" />
+              <span className="text-xs text-muted-foreground">and</span>
+              <input type="date" aria-label="Created to" value={createdTo} onChange={(e) => { setPage(1); setCreatedTo(e.target.value); }} className="h-10 rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none shadow-sm" />
+              {createdFrom && createdTo && !validCreatedRange ? <span role="alert" className="text-xs text-destructive">Date filter inactive: start date must be before or equal to end date.</span> : null}
+              {!!createdFrom !== !!createdTo ? <span className="text-xs text-muted-foreground">Select both dates to apply the date filter.</span> : null}
             </div>
 
             <div className="relative z-30 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
@@ -1312,11 +1352,11 @@ export default function Alerts() {
                               />
                             </div>
 
-                            <div
-                              className="mt-2 mr-1 line-clamp-1 text-xs text-muted-foreground"
-                              title={clampLines(htmlToPlainText(a.description))}
-                            >
-                              {clampLines(htmlToPlainText(a.description))}
+                            <div className="mt-2 mr-1 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                              <button type="button" aria-label="Preview description" title="Preview description" onClick={() => setPreviewAlert(a)} className="inline-flex h-4 w-4 shrink-0 items-center justify-center border-none bg-transparent p-0 text-muted-foreground hover:text-foreground">
+                                <Eye className="h-3 w-3" />
+                              </button>
+                              <span className="truncate" title={a.id}>{a.id}</span>
                             </div>
 
                             {a.case ? (
@@ -1339,19 +1379,20 @@ export default function Alerts() {
                           </div>
 
                           <div className="flex">
-                            <SeverityBadge value={a.severity} />
+                            <InlineEditableBadge portal value={a.severity || ""} options={sevDropdownOptions} disabled={busyAction || !canUpdate} ariaLabel="Change severity" display={<SeverityBadge value={a.severity} />} onChange={value => changeAlertField(a.id, "severity", value)} />
                           </div>
 
                           <div className="flex">
-                            <StatusBadge status={getAlertDisplayStatus(a)} />
+                            <InlineEditableBadge portal value={getAlertDisplayStatus(a)} options={statusDropdownOptions} disabled={busyAction || !canUpdate} ariaLabel="Change status" display={<StatusBadge status={getAlertDisplayStatus(a)} />} onChange={value => changeAlertField(a.id, "status", value)} />
                           </div>
 
                           <div className="flex min-w-0">
-                            <OutcomeBadge value={outcomeCode || undefined} />
+                            <InlineEditableBadge portal value={outcomeCode} options={outcomeDropdownOptions} disabled={busyAction || !canUpdate} ariaLabel="Change outcome" display={<OutcomeBadge value={outcomeCode || undefined} />} onChange={value => changeAlertField(a.id, "outcome", value)} />
                           </div>
 
                           <div className="min-w-0 text-xs text-muted-foreground">
                             <UserAvatar
+                              showInitial
                               src={a.owner_avatar_url}
                               name={a.owner_username || ownerLabelMap.get(String(a.owner_id ?? a.owner ?? ""))}
                             />
@@ -1448,6 +1489,8 @@ export default function Alerts() {
                                         x.id === a.id ? { ...x, status: nextStatus } : x
                                       )
                                     );
+                                    setSelected({});
+                                    await refreshAlertsPage();
                                   } catch (e: any) {
                                     push({
                                       kind: "error",
@@ -1740,6 +1783,17 @@ export default function Alerts() {
       />
 
       <ConfirmDialog
+        open={!!previewAlert}
+        title={previewAlert?.title || "Alert description"}
+        headerActions={previewAlert ? <Link to={`/alerts/${previewAlert.id}`} aria-label="Open alert" title="Open alert" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"><ArrowUpRight className="h-4 w-4" /></Link> : null}
+        size="xl"
+        message={<div className="min-h-[50vh]">{previewAlert?.description ? <MarkdownRenderedContent markdown={previewAlert.description} /> : <span className="text-muted-foreground">No description</span>}</div>}
+        confirmButton={<></>}
+        onConfirm={() => {}}
+        onCancel={() => setPreviewAlert(null)}
+      />
+
+      <ConfirmDialog
         open={!!editUI}
         title={
           editUI && editUI.ids.length > 1
@@ -1763,6 +1817,7 @@ export default function Alerts() {
               >
                 <option value="">— no change</option>
                 <option value="__NULL__">— clear</option>
+                {editCustomer && editCustomer !== "__NULL__" && !customersArr.some(item => String(item.id) === editCustomer) ? <option value={editCustomer}>{itemsArr.find(item => String(item.customer) === editCustomer)?.customer_name || editCustomer}</option> : null}
                 {customersArr
                   .slice()
                   .sort((a, b) => (a?.name || "").localeCompare(b?.name || ""))
@@ -1783,6 +1838,7 @@ export default function Alerts() {
                 disabled={busyAction || !canUpdate}
               >
                 <option value="">— no change</option>
+                {editSeverity && editSeverity !== "__NULL__" && !sevOptionsArr.some(item => String(item.code) === editSeverity) ? <option value={editSeverity}>{editSeverity}</option> : null}
                 {sevOptionsArr
                   .slice()
                   .sort(
@@ -1807,6 +1863,7 @@ export default function Alerts() {
                 disabled={busyAction || !canUpdate}
               >
                 <option value="">— no change</option>
+                {editClassification && editClassification !== "__NULL__" && !clsOptionsArr.some(item => String(item.code) === editClassification) ? <option value={editClassification}>{editClassification}</option> : null}
                 {clsOptionsArr
                   .slice()
                   .sort((a, b) => (a.label || "").localeCompare(b.label || ""))
@@ -1828,6 +1885,7 @@ export default function Alerts() {
               >
                 <option value="">— no change</option>
                 <option value="__NULL__">— clear</option>
+                {editOwnerId && editOwnerId !== "__NULL__" && !usersArr.some(item => String(item.id) === editOwnerId) ? <option value={editOwnerId}>{itemsArr.find(item => String(item.owner_id ?? (item as any).owner) === editOwnerId)?.owner_username || editOwnerId}</option> : null}
                 {usersArr.map((u) => (
                   <option key={u.id} value={String(u.id)}>
                     {u.username}
@@ -1845,6 +1903,7 @@ export default function Alerts() {
                 disabled={busyAction || !canUpdate}
               >
                 <option value="">— no change</option>
+                {editStatus === "merged" ? <option value="merged" disabled>Merged</option> : null}
                 <option value="open">Open</option>
                 <option value="in_progress">In progress</option>
                 <option value="closed">Closed</option>
@@ -1895,6 +1954,11 @@ export default function Alerts() {
 
           if (editOwnerId === "__NULL__") payload.owner = null;
           else if (editOwnerId !== "") payload.owner = editOwnerId;
+
+          const currentValues: Record<string, string> = { customer: editCustomer, severity: editSeverity, classification: editClassification, owner: editOwnerId, status: editStatus, outcome: editOutcome };
+          for (const key of Object.keys(payload)) {
+            if (currentValues[key] === editInitial.current[key]) delete payload[key];
+          }
 
           if (Object.keys(payload).length === 0) {
             push({ kind: "info", title: "Nothing to save" });

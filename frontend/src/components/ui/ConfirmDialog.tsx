@@ -41,6 +41,7 @@ export default function ConfirmDialog({
   cancelTag = "cancel",
   iconOnly = true,
   confirmButton,
+  headerActions,
   onConfirm,
   onCancel,
   size = "md",
@@ -54,6 +55,7 @@ export default function ConfirmDialog({
   cancelTag?: CancelTag;
   iconOnly?: boolean;
   confirmButton?: ReactNode;
+  headerActions?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
   size?: ConfirmDialogSize;
@@ -141,13 +143,16 @@ export default function ConfirmDialog({
             {title}
           </div>
 
-          <CancelButton
-            type="button"
-            onClick={onCancel}
-            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
-            aria-label="Cancel"
-            title="Cancel"
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            {headerActions}
+            <CancelButton
+              type="button"
+              onClick={onCancel}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
+              aria-label="Cancel"
+              title="Cancel"
+            />
+          </div>
         </div>
 
         {message ? (

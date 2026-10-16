@@ -5,6 +5,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
 import ClassificationBadge from "../components/ui/ClassificationBadge";
 import OutcomeBadge from "../components/ui/OutcomeBadge";
+import InlineEditableBadge from "../components/ui/InlineEditableBadge";
 import CustomerScopeBadge from "../components/ui/CustomerScopeBadge";
 import { fetchAlertDetail, type AlertDetail as AlertDetailType } from "../api/alerts";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
@@ -262,102 +263,6 @@ function TinyCsvButton(props: {
   );
 }
 
-function InlineEditableBadge(props: {
-  value: string;
-  onChange: (next: string) => void | Promise<void>;
-  disabled?: boolean;
-  options: { value: string; label: string }[];
-  display: ReactNode;
-  ariaLabel: string;
-  menuAlign?: "left" | "right";
-}) {
-  const { value, onChange, disabled, options, display, ariaLabel, menuAlign = "left" } = props;
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    function onPointerDown(e: MouseEvent) {
-      const el = rootRef.current;
-      if (!el) return;
-      if (e.target instanceof Node && !el.contains(e.target)) {
-        setOpen(false);
-      }
-    }
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative inline-flex items-center">
-      <button
-        type="button"
-        disabled={disabled}
-        aria-label={ariaLabel}
-        title={ariaLabel}
-        onClick={() => setOpen((prev) => !prev)}
-        className={[
-          "inline-flex border-none bg-transparent items-center rounded-xl transition",
-          disabled
-            ? "cursor-not-allowed opacity-60"
-            : "cursor-pointer hover:scale-[1.05] focus:outline-none focus:ring-ring/20",
-        ].join(" ")}
-      >
-        {display}
-      </button>
-
-      {open && !disabled ? (
-        <div
-          className={[
-            "absolute top-full z-50 mt-2 min-w-[220px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-card shadow-panel",
-            menuAlign === "right" ? "right-0" : "left-0",
-          ].join(" ")}
-        >
-          <div className="max-h-72 overflow-auto p-1.5">
-            {options.map((option) => {
-              const selected = option.value === value;
-
-              return (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={async () => {
-                    setOpen(false);
-                    if (option.value !== value) {
-                      await onChange(option.value);
-                    }
-                  }}
-                  className={[
-                    "flex w-full border-none bg-transparent cursor-pointer items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition",
-                    selected
-                      ? "bg-accent border-none bg-transparent text-accent-foreground"
-                      : "text-foreground border-none bg-transparent hover:bg-accent/60",
-                  ].join(" ")}
-                >
-                  <span>{option.label}</span>
-                  {selected ? (
-                    <span className="text-xs text-muted-foreground">Selected</span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 function InlineTextBadge(props: { children: ReactNode }) {
   return (

@@ -5,9 +5,10 @@ type Props = {
   src?: string | null;
   name?: string | null;
   size?: "small" | "sidebar";
+  showInitial?: boolean;
 };
 
-export default function UserAvatar({ src, name, size = "small" }: Props) {
+export default function UserAvatar({ src, name, size = "small", showInitial = false }: Props) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const showImage = Boolean(src && src !== failedSrc);
   const label = name || "Unassigned";
@@ -32,7 +33,7 @@ export default function UserAvatar({ src, name, size = "small" }: Props) {
         <svg aria-hidden="true" viewBox="0 0 28 28" className="h-full w-full" fill="none">
           <path d="M9 9L19 19M19 9L9 19" stroke="black" strokeWidth={1} vectorEffect="non-scaling-stroke" />
         </svg>
-      ) : null}
+      ) : showInitial ? <span className="flex h-full w-full items-center justify-center text-xs font-medium text-foreground">{Array.from(name.trim())[0]?.toLocaleUpperCase()}</span> : null}
     </span>
   );
 }

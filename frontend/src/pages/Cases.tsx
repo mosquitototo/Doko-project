@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Card from "../components/ui/Card";
 import UserAvatar from "../components/ui/UserAvatar";
+import MarkdownRenderedContent from "../components/ui/MarkdownRenderedContent";
+import { ArrowUpRight, Eye } from "lucide-react";
 import StatusBadge from "../components/ui/StatusBadge";
 import {
   fetchTickets,
@@ -51,20 +53,6 @@ function formatDate(iso: string) {
   }
 }
 
-function htmlToPlainText(html?: string | null) {
-  return String(html || "")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 const pageSizeOptions = [10, 20, 50, 100];
 
@@ -134,7 +122,7 @@ type SortKey =
   | "outcome"
   | "customer"
   | "owner"
-  | "updated_at";
+  | "created_at";
 
 type SortDirection = "asc" | "desc";
 
@@ -151,9 +139,9 @@ function parseOrdering(ordering: string): {
     raw === "outcome" ||
     raw === "customer" ||
     raw === "owner" ||
-    raw === "updated_at"
+    raw === "created_at"
       ? raw
-      : "updated_at";
+      : "created_at";
   return { key, direction };
 }
 
@@ -230,6 +218,7 @@ function HeaderSortLabel({
 
 export default function Tickets() {
   const [items, setItems] = useState<CaseListItem[]>([]);
+  const [previewCase, setPreviewCase] = useState<CaseListItem | null>(null);
   const [serverCount, setServerCount] = useState(0);
 
   const itemsArr = useMemo(
@@ -246,7 +235,10 @@ export default function Tickets() {
 
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [ordering, setOrdering] = useState("-updated_at");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
+  const validCreatedRange = !!createdFrom && !!createdTo && createdFrom <= createdTo;
+  const [ordering, setOrdering] = useState("-created_at");
 
   const [includeArchived, setIncludeArchived] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -298,21 +290,37 @@ export default function Tickets() {
   const [clsOptions, setClsOptions] = useState<ClassificationItem[]>([]);
 
   const [editUI, setEditUI] = useState<{ ids: string[] } | null>(null);
+  const editInitial = useRef<Record<string, string>>({});
   const [editCustomer, setEditCustomer] = useState<string>("");
   const [editSeverity, setEditSeverity] = useState<string>("");
   const [editClassification, setEditClassification] = useState<string>("");
   const [editOwnerId, setEditOwnerId] = useState<string>("");
 
   function openEdit(ids: string[]) {
-    setEditCustomer("");
-    setEditSeverity("");
-    setEditClassification("");
-    setEditOwnerId("");
+    const rows = items.filter(item => ids.includes(item.id));
+    const common = (read: (item: any) => unknown, empty = "") => {
+      if (!rows.length || rows.length !== ids.length) return "";
+      const values = rows.map(item => String(read(item) ?? empty));
+      return values.every(value => value === values[0]) ? values[0] : "";
+    };
+    const values = {
+      customer: common(item => item.customer, "__NULL__"),
+      severity: common(item => item.severity),
+      classification: common(item => item.classification),
+      owner_id: common(item => item.owner_id_read ?? item.owner_id ?? item.owner, "__NULL__"),
+    };
+    editInitial.current = values;
+    setEditCustomer(values.customer);
+    setEditSeverity(values.severity);
+    setEditClassification(values.classification);
+    setEditOwnerId(values.owner_id);
     setEditUI({ ids });
   }
 
   const caseQueryParams = useMemo(
     () => ({
+      created_from: validCreatedRange ? createdFrom : undefined,
+      created_to: validCreatedRange ? createdTo : undefined,
       page,
       page_size: pageSize,
       search: search || undefined,
@@ -326,6 +334,9 @@ export default function Tickets() {
       include_archived: includeArchived ? "1" : undefined,
     }),
     [
+      createdFrom,
+      createdTo,
+      validCreatedRange,
       page,
       pageSize,
       search,
@@ -612,6 +623,8 @@ export default function Tickets() {
   useEffect(() => {
     setSelected({});
   }, [
+    createdFrom,
+    createdTo,
     page,
     pageSize,
     search,
@@ -632,12 +645,14 @@ export default function Tickets() {
       if (current.key === key) {
         return current.direction === "asc" ? `-${key}` : key;
       }
-      if (key === "updated_at") return "-updated_at";
+      if (key === "created_at") return "-created_at";
       return key;
     });
   }
 
   const clearFilters = () => {
+    setCreatedFrom("");
+    setCreatedTo("");
     setPage(1);
     setStatus(["open", "in_progress"]);
     setOwner([]);
@@ -673,27 +688,22 @@ export default function Tickets() {
       </div>
 
       <Card className="relative z-20 overflow-visible p-5">
-        <div className="flex items-start justify-between gap-3">
+        <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(v => !v)} className="flex w-full cursor-pointer items-start justify-between gap-3 border-none bg-transparent p-0 text-left">
           <div className="flex items-center gap-2">
             <div className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border bg-background text-muted-foreground">
               <SlidersHorizontal className="h-4 w-4" />
             </div>
             <div>
               <div className="text-sm font-semibold text-foreground">Filters</div>
-              <div className="text-xs text-muted-foreground">
-                Narrow the visible case scope
-              </div>
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
+          <span
             className="rounded-2xl border cursor-pointer border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition hover:bg-accent"
           >
             {filtersOpen ? "Collapse" : "Expand"}
-          </button>
-        </div>
+          </span>
+        </button>
 
         {filtersOpen ? (
           <div className="mt-4 grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
@@ -736,6 +746,15 @@ export default function Tickets() {
                   onClick={clearFilters}
                 />
               </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">Created between</span>
+              <input type="date" aria-label="Created from" value={createdFrom} onChange={(e) => { setPage(1); setCreatedFrom(e.target.value); }} className="h-10 rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none shadow-sm" />
+              <span className="text-xs text-muted-foreground">and</span>
+              <input type="date" aria-label="Created to" value={createdTo} onChange={(e) => { setPage(1); setCreatedTo(e.target.value); }} className="h-10 rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none shadow-sm" />
+              {createdFrom && createdTo && !validCreatedRange ? <span role="alert" className="text-xs text-destructive">Date filter inactive: start date must be before or equal to end date.</span> : null}
+              {!!createdFrom !== !!createdTo ? <span className="text-xs text-muted-foreground">Select both dates to apply the date filter.</span> : null}
             </div>
 
             <div className="relative z-30 grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
@@ -971,10 +990,10 @@ export default function Tickets() {
                   />
 
                   <HeaderSortLabel
-                    label="Updated"
-                    active={sortMeta.key === "updated_at"}
+                    label="Created"
+                    active={sortMeta.key === "created_at"}
                     direction={sortMeta.direction}
-                    onClick={() => toggleSort("updated_at")}
+                    onClick={() => toggleSort("created_at")}
                     align="right"
                   />
                 </div>
@@ -1024,11 +1043,11 @@ export default function Tickets() {
                             />
                           </div>
 
-                          <div
-                            className="mt-2 line-clamp-1 text-xs text-muted-foreground"
-                            title={htmlToPlainText(t.description) || "—"}
-                          >
-                            {htmlToPlainText(t.description) || "—"}
+                          <div className="mt-2 flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+                            <button type="button" aria-label="Preview description" title="Preview description" onClick={() => setPreviewCase(t)} className="inline-flex h-4 w-4 shrink-0 items-center justify-center border-none bg-transparent p-0 text-muted-foreground hover:text-foreground">
+                              <Eye className="h-3 w-3" />
+                            </button>
+                            <span className="truncate" title={t.id}>{t.id}</span>
                           </div>
                         </div>
 
@@ -1054,11 +1073,11 @@ export default function Tickets() {
                         </div>
 
                         <div className="min-w-0 text-xs text-muted-foreground">
-                          <UserAvatar src={t.owner_avatar_url} name={t.owner_username} />
+                          <UserAvatar src={t.owner_avatar_url} name={t.owner_username} showInitial />
                         </div>
 
                         <div className="text-right text-[11px] text-muted-foreground">
-                          {formatDate(t.updated_at)}
+                          {formatDate(t.created_at)}
                         </div>
                       </div>
                     </div>
@@ -1103,6 +1122,17 @@ export default function Tickets() {
           </>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={!!previewCase}
+        title={previewCase?.title || "Case description"}
+        size="xl"
+        headerActions={previewCase ? <Link to={`/cases/${previewCase.id}`} aria-label="Open case" title="Open case" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"><ArrowUpRight className="h-4 w-4" /></Link> : null}
+        message={<div className="min-h-[50vh]">{previewCase?.description ? <MarkdownRenderedContent markdown={previewCase.description} /> : <span className="text-muted-foreground">No description</span>}</div>}
+        confirmButton={<></>}
+        onConfirm={() => {}}
+        onCancel={() => setPreviewCase(null)}
+      />
 
       <ConfirmDialog
         open={!!confirmDelete}
@@ -1171,6 +1201,7 @@ export default function Tickets() {
               >
                 <option value="">— no change</option>
                 <option value="__NULL__">— clear</option>
+                {editCustomer && editCustomer !== "__NULL__" && !customersArr.some(item => String(item.id) === editCustomer) ? <option value={editCustomer}>{items.find(item => String(item.customer) === editCustomer)?.customer_name || editCustomer}</option> : null}
                 {customersArr
                   .slice()
                   .sort((a, b) => (a?.name || "").localeCompare(b?.name || ""))
@@ -1191,6 +1222,7 @@ export default function Tickets() {
                 disabled={busyBulkAction}
               >
                 <option value="">— no change</option>
+                {editSeverity && editSeverity !== "__NULL__" && !sevOptions.some(item => String(item.code) === editSeverity) ? <option value={editSeverity}>{editSeverity}</option> : null}
                 {sevOptions
                   .slice()
                   .sort(
@@ -1215,6 +1247,7 @@ export default function Tickets() {
                 disabled={busyBulkAction}
               >
                 <option value="">— no change</option>
+                {editClassification && editClassification !== "__NULL__" && !clsOptions.some(item => String(item.code) === editClassification) ? <option value={editClassification}>{editClassification}</option> : null}
                 {clsOptions
                   .slice()
                   .sort((a, b) => (a.label || "").localeCompare(b.label || ""))
@@ -1236,6 +1269,7 @@ export default function Tickets() {
               >
                 <option value="">— no change</option>
                 <option value="__NULL__">— clear</option>
+                {editOwnerId && editOwnerId !== "__NULL__" && !usersArr.some(item => String(item.id) === editOwnerId) ? <option value={editOwnerId}>{items.find(item => String(item.owner_id_read) === editOwnerId)?.owner_username || editOwnerId}</option> : null}
                 {usersArr.map((u) => (
                   <option key={u.id} value={String(u.id)}>
                     {u.username}
@@ -1269,6 +1303,11 @@ export default function Tickets() {
 
           if (editOwnerId === "__NULL__") payload.owner_id = null;
           else if (editOwnerId !== "") payload.owner_id = Number(editOwnerId);
+
+          const currentValues: Record<string, string> = { customer: editCustomer, severity: editSeverity, classification: editClassification, owner_id: editOwnerId };
+          for (const key of Object.keys(payload)) {
+            if (currentValues[key] === editInitial.current[key]) delete payload[key];
+          }
 
           if (Object.keys(payload).length === 0) {
             push({ kind: "info", title: "Nothing to save" });
