@@ -738,19 +738,19 @@ export default function TicketDetail() {
 
   
   async function saveIfDirty(description?: string) {
-    if (!canUpdateCase) return;
-    if (!ticketId || !caseItem) return;
+    if (!canUpdateCase) return false;
+    if (!ticketId || !caseItem) return false;
     if (saveInFlightRef.current) {
       saveQueuedRef.current = true;
-      return;
+      return false;
     }
     const nextTitle = editTitle.trim();
     const nextDesc = description ?? editDescription ?? "";
     if (!nextTitle) {
       setEditTitle(caseItem.title);
-      return;
+      return false;
     }
-    if (nextTitle === (caseItem.title ?? "") && nextDesc === (caseItem.description ?? "")) return;
+    if (nextTitle === (caseItem.title ?? "") && nextDesc === (caseItem.description ?? "")) return true;
     saveInFlightRef.current = true;
     setBusy(true);
     try {
@@ -760,8 +760,10 @@ export default function TicketDetail() {
       setEditDescription(nextDesc);
       push({ kind: "success", title: "Saved" });
       await refreshAll();
+      return true;
     } catch (e: any) {
       push({ kind: "error", title: "Error", message: String(e?.response?.status ?? "network") });
+      return false;
     } finally {
       saveInFlightRef.current = false;
       setBusy(false);
@@ -859,16 +861,18 @@ export default function TicketDetail() {
   }
 
   async function submitComment() {
-    if (!canUpdateCase) return;
-    if (!ticketId || isRichTextEmpty(commentText)) return;
+    if (!canUpdateCase) return false;
+    if (!ticketId || isRichTextEmpty(commentText)) return false;
     setBusy(true);
     try {
       await addComment(ticketId, commentText);
       push({ kind: "success", title: "Comment added" });
       setCommentText("");
       await refreshAll();
+      return true;
     } catch (e: any) {
       push({ kind: "error", title: "Error", message: String(e?.response?.data?.detail ?? e?.response?.status ?? "network") });
+      return false;
     } finally {
       setBusy(false);
     }
@@ -1199,7 +1203,7 @@ export default function TicketDetail() {
         setReportBusy={setReportBusy}
       />
 
-      <div className="flex gap-2 py-4">
+      <div aria-label="Case sections" className="flex gap-1.5 overflow-x-auto py-1">
         {[
           { k: "summary", label: "Summary" },
           { k: "exchanges", label: "Exchanges" },
@@ -1211,7 +1215,7 @@ export default function TicketDetail() {
           <button
             key={t.k}
             type="button"
-            className={`flex-1 border-none py-3 text-sm hover:bg-slate-800 hover:text-white font-semibold cursor-pointer transition-all duration-200 rounded-xl border-2 hover:-translate-y-1 active:scale-95 ${
+            className={`flex-1 shrink-0 whitespace-nowrap border-none px-3 py-2 text-sm hover:bg-slate-800 hover:text-white font-semibold cursor-pointer transition-all duration-200 rounded-xl border-2 hover:-translate-y-1 active:scale-95 ${
               tab === t.k
                 ? "bg-slate-800 text-white shadow-md hover:shadow-xl transform auto-scale-95"
                 : "border-gray-100 bg-white shadow-md hover:shadow-xl hover:bg-slate-100 text-slate-500 hover:border-gray-300 hover:text-slate-700"
@@ -1227,6 +1231,7 @@ export default function TicketDetail() {
 
       {tab === "summary" ? (
         <CaseSummaryTab
+          key={ticketId}
           busy={busy}
           editDescription={editDescription}
           description={caseItem?.description ?? ""}

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import Card from "../components/ui/Card";
+import UserAvatar from "../components/ui/UserAvatar";
 import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
 import ClassificationBadge from "../components/ui/ClassificationBadge";
@@ -358,6 +359,7 @@ export default function AlertDetail() {
 
   const [comments, setComments] = useState<AlertComment[]>([]);
   const [commentText, setCommentText] = useState("");
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [commentBusyId, setCommentBusyId] = useState<string | null>(null);
@@ -365,13 +367,33 @@ export default function AlertDetail() {
 
   const [editDescription, setEditDescription] = useState("");
   const [descriptionActionsVisible, setDescriptionActionsVisible] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [descriptionOverflow, setDescriptionOverflow] = useState(false);
+  const descriptionContentRef = useRef<HTMLDivElement | null>(null);
   const alertDescFocusedRef = useRef(false);
   const saveDescriptionInFlightRef = useRef(false);
-  const saveDescriptionQueuedRef = useRef(false);
   const iocFileInputRef = useRef<HTMLInputElement | null>(null);
   const assetFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const location = useLocation();
+
+  useEffect(() => {
+    const element = descriptionContentRef.current;
+    if (!element) return;
+    const measure = () => setDescriptionOverflow(element.scrollHeight > 384);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [item?.description, descriptionActionsVisible]);
+
+  useEffect(() => {
+    setDescriptionExpanded(false);
+    setDescriptionActionsVisible(false);
+    alertDescFocusedRef.current = false;
+    setNoteEditorOpen(false);
+    setCommentText("");
+  }, [alertId]);
 
   useEffect(() => {
     sessionStorage.setItem(`doko:chat:tab:${location.pathname}`, "overview");
@@ -555,19 +577,18 @@ export default function AlertDetail() {
   }
 
   async function saveDescriptionIfDirty(description?: string) {
-    if (!canUpdate) return;
-    if (!alertId || !item) return;
+    if (!canUpdate) return false;
+    if (!alertId || !item) return false;
 
     if (saveDescriptionInFlightRef.current) {
-      saveDescriptionQueuedRef.current = true;
-      return;
+      return false;
     }
 
     const nextDesc = description ?? editDescription ?? "";
     const currentDesc = item.description ?? "";
 
     if (nextDesc === currentDesc) {
-      return;
+      return true;
     }
 
     saveDescriptionInFlightRef.current = true;
@@ -581,6 +602,7 @@ export default function AlertDetail() {
 
       push({ kind: "success", title: "Saved" });
       await refreshAll();
+      return true;
     } catch (e: any) {
       push({
         kind: "error",
@@ -589,19 +611,16 @@ export default function AlertDetail() {
           e?.response?.data?.detail ?? e?.response?.status ?? "network"
         ),
       });
+      return false;
     } finally {
       saveDescriptionInFlightRef.current = false;
       setBusyAction(false);
 
-      if (saveDescriptionQueuedRef.current) {
-        saveDescriptionQueuedRef.current = false;
-        void saveDescriptionIfDirty(nextDesc);
-      }
     }
   }
 
   async function saveDescriptionFromEditor() {
-    await saveDescriptionIfDirty(editDescription ?? "");
+    if (!await saveDescriptionIfDirty(editDescription ?? "")) return;
     alertDescFocusedRef.current = false;
     setDescriptionActionsVisible(false);
   }
@@ -622,6 +641,7 @@ export default function AlertDetail() {
       await addAlertComment(alertId, text);
       push({ kind: "success", title: "Comment added" });
       setCommentText("");
+      setNoteEditorOpen(false);
       await refreshAll();
     } catch (e: any) {
       push({
@@ -756,14 +776,18 @@ export default function AlertDetail() {
   return (
     <div className="space-y-6">
 
-      <div className="flex items-center justify-between">
-        <div className="text-xs italic text-muted-foreground">
-          Raised {formatDate(item.created_at)}
+      <nav aria-label="Alert navigation" className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+          <LeftButton onClick={() => navigate("/alerts")} title="Back" iconOnly className="h-8 w-8 shrink-0 border-transparent bg-transparent p-1 shadow-none" />
+          <Link to="/alerts" className="hover:underline">Alerts</Link>
+          <span aria-hidden="true">›</span>
+          <span className="min-w-0 truncate" title={item.title}>{item.title}</span>
         </div>
-        <div className="text-[10px] italic text-muted-foreground">
-          Alert ID {item.id}
+        <div className="min-w-0 text-right text-muted-foreground leading-4">
+          <div className="break-all text-[10px] leading-4">Alert ID: {item.id}</div>
+          <div className="text-[10px] italic leading-4">Raised {formatDate(item.created_at)}</div>
         </div>
-      </div>
+      </nav>
 
       <input
         ref={iocFileInputRef}
@@ -793,22 +817,14 @@ export default function AlertDetail() {
 
 
 
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="min-w-0">
-            <div className="mb-1 flex h-8 items-center">
-              <LeftButton
-                onClick={() => navigate("/alerts")}
-                title="Back"
-                iconOnly
-                className="px-1 py-1 h-fit min-h-0 line-height-none"
-              />
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-foreground">
+      <Card className="relative z-10 !mt-3 grid min-w-0 grid-cols-1 items-start gap-x-4 gap-y-4 p-5 lg:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="contents">
+          <div className="contents">
+            <div className="row-start-1 min-w-0 break-words text-2xl font-semibold tracking-tight text-foreground [overflow-wrap:anywhere] lg:col-start-1">
               {item.title}
             </div>
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="row-start-4 flex min-w-0 flex-wrap items-center gap-2 lg:col-start-1 lg:row-start-2">
               <SlaBadge state={safeSlaState} />
               
               <CustomerScopeBadge
@@ -844,7 +860,7 @@ export default function AlertDetail() {
               />
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-3">
+            <div className="row-start-5 flex min-w-0 flex-wrap items-center gap-3 lg:col-start-1 lg:row-start-3">
               <div className="flex items-center gap-2">
                 <Workflow className="size-4 text-muted-foreground" />
                 <InlineEditableBadge
@@ -892,13 +908,14 @@ export default function AlertDetail() {
                   display={<ClassificationBadge value={safeClassification} />}
                 />
               </div>
+              <span className="break-all text-xs italic text-muted-foreground">Alert source: {(item as any).source || "—"}</span>
             </div>
 
           </div>
         </div>
 
-        <div className="flex flex-col items-start gap-3 xl:items-end">
-          <div className="flex flex-wrap items-center gap-2">
+        <div className="contents">
+          <div className="row-start-2 flex flex-wrap items-center gap-2 lg:col-start-2 lg:row-start-1 lg:justify-end">
             {canMerge ? (
               <MergeButton
                 disabled={busyAction || !canMerge}
@@ -946,11 +963,7 @@ export default function AlertDetail() {
             />
           </div>
 
-          <div className="mt-4 max-w-[360px] break-words text-right text-xs italic text-muted-foreground">
-            Alert source: {(item as any).source || "—"}
-          </div>
-
-          <div className="mt-2 flex flex-wrap items-center gap-3 xl:mt-[28px]">
+          <div className="row-start-6 flex min-w-0 flex-wrap items-center gap-3 lg:col-start-2 lg:row-start-3 lg:justify-end">
             <div className="flex items-center gap-2">
               <Info className="size-4 text-muted-foreground" />
               <InlineEditableBadge
@@ -1004,7 +1017,7 @@ export default function AlertDetail() {
           </div>
 
           {linkedCaseId ? (
-            <div className="mt-2 text-xs text-muted-foreground">
+            <div className="row-start-7 min-w-0 break-words text-xs text-muted-foreground lg:col-span-2 lg:row-start-5">
               Linked case:{" "}
               <Link
                 to={`/cases/${linkedCaseId}`}
@@ -1018,79 +1031,52 @@ export default function AlertDetail() {
             </div>
           ) : null}
         </div>
-      </div>
-
-
-      <Card className="p-5">
-        <div
-          onFocus={() => {
-            alertDescFocusedRef.current = true;
-            setDescriptionActionsVisible(true);
-          }}
-          onBlur={(e) => {
-            const wrapper = e.currentTarget;
-
-            window.requestAnimationFrame(() => {
-              const activeElement = document.activeElement;
-
-              if (activeElement && wrapper.contains(activeElement)) {
-                return;
-              }
-
-              const openMdxDropdown = document.querySelector(
-                "[role='listbox'], [role='menu'], [data-radix-popper-content-wrapper]"
-              );
-
-              if (openMdxDropdown) {
-                return;
-              }
-
-              alertDescFocusedRef.current = false;
-              setDescriptionActionsVisible(false);
-            });
-          }}
-        >
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-foreground">Description</div>
-            {descriptionActionsVisible ? (
-              <div className="flex items-center gap-2">
-                <SaveButton
-                  onClick={() => void saveDescriptionFromEditor()}
-                  disabled={busyAction || !canUpdate || (editDescription ?? "") === (item.description ?? "")}
-                  title="Save description"
-                >
-                  Save
-                </SaveButton>
-                <CancelButton
-                  onClick={cancelDescriptionEdit}
-                  disabled={busyAction || !canUpdate}
-                  title="Cancel"
-                />
-              </div>
-            ) : null}
-          </div>
-
-          <MarkdownEditor
-            value={editDescription ?? ""}
-            onChange={(v) => setEditDescription(v)}
-            disabled={busyAction || !canUpdate}
-            placeholder="Write a description..."
-            className="text-sm"
-          />
-        </div>
       </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="p-5">
+
+      <Card className="min-w-0 p-5">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-foreground">Description</div>
+          <div className="flex items-center gap-2">
+            {descriptionActionsVisible ? <>
+              <SaveButton onClick={() => void saveDescriptionFromEditor()} disabled={busyAction || !canUpdate} title="Save description" />
+              <CancelButton onClick={cancelDescriptionEdit} disabled={busyAction} title="Cancel description" />
+            </> : <>
+              {canUpdate ? <EditGenButton onClick={() => { setEditDescription(item.description || ""); alertDescFocusedRef.current = true; setDescriptionActionsVisible(true); }} disabled={busyAction} title="Edit description" /> : null}
+            </>}
+          </div>
+        </div>
+        {descriptionActionsVisible ? <MarkdownEditor
+          alwaysShowToolbar
+          value={editDescription ?? ""}
+          onChange={setEditDescription}
+          disabled={busyAction || !canUpdate}
+          placeholder="Write a description..."
+          className="text-sm"
+        /> : <>
+          <div className={descriptionExpanded ? "min-w-0" : "max-h-96 min-w-0 overflow-hidden"}>
+            <div ref={descriptionContentRef} className="min-w-0 break-words [overflow-wrap:anywhere]">
+              {item.description ? <MarkdownRenderedContent markdown={item.description} /> : <span className="text-sm text-muted-foreground">No description</span>}
+            </div>
+          </div>
+          {descriptionOverflow ? <button type="button" aria-expanded={descriptionExpanded} className="mx-auto mt-2 block rounded-xl px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => setDescriptionExpanded(value => !value)}>{descriptionExpanded ? "Show less" : "Show more"}</button> : null}
+        </>}
+      </Card>
+
+      <div className="grid min-w-0 items-start gap-6 xl:grid-cols-2">
+        <Card className="min-w-0 p-5">
           <KeyValueEditor
+            key={`${alertId}-IoCs`}
             title="IoCs"
             rows={(item as any).iocs || []}
             disabled={busyAction || loading || !canUpdate}
             showStatus={true}
             statusOptions={IOC_STATUS_OPTIONS}
-            scrollBodyClassName="max-h-[420px]"
+            compact
             headerActions={
-              <>
+              <details className="relative" onClick={(e) => { if ((e.target as HTMLElement).closest("button")) e.currentTarget.open = false; }} onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.open = false; }}>
+                <summary aria-label="CSV actions" title="CSV actions" className="inline-flex h-8 cursor-pointer list-none items-center rounded-xl border border-border bg-background px-2.5 text-foreground hover:bg-accent [&::-webkit-details-marker]:hidden">⋯</summary>
+                <div className="absolute right-0 z-40 mt-1 flex min-w-max flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-panel">
                 <TinyCsvButton
                   label="Import CSV"
                   title="Import IoCs from CSV"
@@ -1105,7 +1091,8 @@ export default function AlertDetail() {
                     void handleExport("iocs");
                   }}
                 />
-              </>
+                </div>
+              </details>
             }
             onChange={async (next) => {
               await updateAlert(alertId, { iocs: next } as any);
@@ -1114,16 +1101,19 @@ export default function AlertDetail() {
           />
         </Card>
 
-        <Card className="p-5">
+        <Card className="min-w-0 p-5">
           <KeyValueEditor
+            key={`${alertId}-Assets`}
             title="Assets"
             rows={(item as any).assets || []}
             disabled={busyAction || loading || !canUpdate}
             showStatus={true}
             statusOptions={ASSET_STATUS_OPTIONS}
-            scrollBodyClassName="max-h-[420px]"
+            compact
             headerActions={
-              <>
+              <details className="relative" onClick={(e) => { if ((e.target as HTMLElement).closest("button")) e.currentTarget.open = false; }} onKeyDown={(e) => { if (e.key === "Escape") e.currentTarget.open = false; }}>
+                <summary aria-label="CSV actions" title="CSV actions" className="inline-flex h-8 cursor-pointer list-none items-center rounded-xl border border-border bg-background px-2.5 text-foreground hover:bg-accent [&::-webkit-details-marker]:hidden">⋯</summary>
+                <div className="absolute right-0 z-40 mt-1 flex min-w-max flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-panel">
                 <TinyCsvButton
                   label="Import CSV"
                   title="Import assets from CSV"
@@ -1138,7 +1128,8 @@ export default function AlertDetail() {
                     void handleExport("assets");
                   }}
                 />
-              </>
+                </div>
+              </details>
             }
             onChange={async (next) => {
               if (!canUpdate) return;
@@ -1150,30 +1141,24 @@ export default function AlertDetail() {
       </div>
 
       <Card className="p-5">
-        <div className="mb-3 text-lg font-semibold text-foreground">
-          Investigation
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <div className="text-lg font-semibold text-foreground">Investigation</div>
+            <span className="rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">{comments.length}</span>
+          </div>
+          {!noteEditorOpen && canUpdate ? <NewGenButton onClick={() => setNoteEditorOpen(true)} disabled={busyAction} iconOnly={false} label="Add note" title="Add note" /> : null}
         </div>
-
-        <MarkdownEditor
-          value={commentText}
-          onChange={(v) => setCommentText(v)}
-          disabled={busyAction || !canUpdate}
-          placeholder="Write a note..."
-          className="text-sm text-foreground"
-        />
-
-        <NewGenButton
-          onClick={submitComment}
-          disabled={busyAction || !canUpdate || isRichTextEmpty(commentText)}
-          className="mt-3 w-full"
-          iconOnly={false}
-          label="Add note"
-          title="Add note"
-        />
+        {noteEditorOpen ? <div className="space-y-3">
+          <MarkdownEditor alwaysShowToolbar value={commentText} onChange={setCommentText} disabled={busyAction || !canUpdate} placeholder="Write a note..." className="text-sm text-foreground" />
+          <div className="flex justify-end gap-2">
+            <CancelButton onClick={() => { setNoteEditorOpen(false); setCommentText(""); }} disabled={busyAction} title="Cancel note" />
+            <NewGenButton onClick={submitComment} disabled={busyAction || !canUpdate || isRichTextEmpty(commentText)} iconOnly={false} label="Publish" title="Publish note" />
+          </div>
+        </div> : null}
 
         <div className="mt-5 space-y-3">
           {comments.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-8 text-center">
+            <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-3 text-center">
               <div className="text-sm font-medium text-foreground">
                 No note yet
               </div>
@@ -1185,17 +1170,23 @@ export default function AlertDetail() {
             comments
               .slice()
               .reverse()
-              .map((c) => (
+              .map((c, index) => (
                 <div
                   key={c.id}
-                  className="rounded-2xl border border-border bg-background p-4"
+                  className="relative grid min-w-0 grid-cols-[12px_32px_minmax(0,1fr)] gap-2 sm:grid-cols-[16px_40px_minmax(0,1fr)] sm:gap-3"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-xs text-muted-foreground">
-                      {formatDate(c.created_at)}
-                      {c.author_display ? (
-                        <span className="ml-1 text-muted-foreground/90">• {c.author_display}</span>
-                      ) : null}
+                  <div aria-hidden="true" className="relative flex justify-center">
+                    {index < comments.length - 1 ? <span className="absolute -bottom-3 top-6 border-l border-border" /> : null}
+                    <span className="relative mt-5 h-3 w-3 rounded-full border border-muted-foreground bg-card" />
+                  </div>
+                  <div className="mt-3 flex justify-center">
+                    <UserAvatar showInitial src={c.author_avatar_url} name={c.author_display || c.author_label} />
+                  </div>
+                  <div className="min-w-0 rounded-2xl border border-border bg-background px-3 py-3 sm:px-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                      <span className="break-words text-sm font-semibold text-foreground">{c.author_display || c.author_label || "Unknown author"}</span>
+                      <span className="text-xs text-muted-foreground">{formatDate(c.created_at)}</span>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -1239,6 +1230,7 @@ export default function AlertDetail() {
                   {editingCommentId === c.id ? (
                     <div className="mt-3">
                       <MarkdownEditor
+                        alwaysShowToolbar
                         value={editingText}
                         onChange={(v) => setEditingText(v)}
                         disabled={busyAction || !canUpdate || commentBusyId === c.id}
@@ -1247,13 +1239,14 @@ export default function AlertDetail() {
                       />
                     </div>
                   ) : (
-                    <div className="mt-3 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">
+                    <div className="mt-2 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">
                       <MarkdownRenderedContent
                         markdown={String(c.text || "")}
-                        className="min-w-0 max-w-full"
+                        className="min-w-0 max-w-full !rounded-none !border-0 !bg-transparent !shadow-none [&_[contenteditable=false]]:!p-0"
                       />
                     </div>
                   )}
+                  </div>
                 </div>
               ))
           )}

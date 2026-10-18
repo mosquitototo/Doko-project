@@ -1717,7 +1717,7 @@ class AlertCommentListCreateForAlertView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         alert = self.get_alert()
-        return AlertComment.objects.filter(alert=alert).order_by("created_at")
+        return AlertComment.objects.filter(alert=alert).select_related("author__profile").order_by("created_at")
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()

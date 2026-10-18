@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import Card from "../../ui/Card";
 import MarkdownEditor from "../../ui/MarkdownEditor";
 import MarkdownRenderedContent from "../../ui/MarkdownRenderedContent";
+import UserAvatar from "../../ui/UserAvatar";
 import { CancelButton, DeleteButton, EditGenButton, NewGenButton, OpenGenButton, SaveButton, UnMergeButton } from "../../ui/IconButton";
 import type { Attachment, Comment, LinkedAlert, LinkedTask, WorkbookInstance } from "../../../api/caseDetail";
 import type { WorkbookTemplate } from "../../../api/settingsWorkbooks";
@@ -17,11 +18,11 @@ type Props = {
   editDescription: string;
   description: string;
   setEditDescription: React.Dispatch<React.SetStateAction<string>>;
-  saveIfDirty: (description?: string) => void | Promise<void>;
+  saveIfDirty: (description?: string) => Promise<boolean>;
   onDescriptionFocusChange?: (focused: boolean) => void;
   commentText: string;
   setCommentText: React.Dispatch<React.SetStateAction<string>>;
-  submitComment: () => void | Promise<void>;
+  submitComment: () => Promise<boolean>;
   comments: Comment[];
   editingCommentId: string | null;
   editingText: string;
@@ -50,7 +51,21 @@ type Props = {
 
 export default function CaseSummaryTab(props: Props) {
   const [descriptionActionsVisible, setDescriptionActionsVisible] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [descriptionOverflow, setDescriptionOverflow] = useState(false);
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false);
+  const descriptionContentRef = useRef<HTMLDivElement | null>(null);
   const caseDescFocusedRef = useRef(false);
+
+  useEffect(() => {
+    const element = descriptionContentRef.current;
+    if (!element) return;
+    const measure = () => setDescriptionOverflow(element.scrollHeight > 384);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [props.description, descriptionActionsVisible]);
 
   useEffect(() => {
     if (caseDescFocusedRef.current) return;
@@ -64,8 +79,11 @@ export default function CaseSummaryTab(props: Props) {
   }
 
   async function saveDescription() {
-    await props.saveIfDirty(props.editDescription ?? "");
-    setDescriptionEditing(false);
+    if (await props.saveIfDirty(props.editDescription ?? "")) setDescriptionEditing(false);
+  }
+
+  async function publishNote() {
+    if (await props.submitComment()) setNoteEditorOpen(false);
   }
 
   function cancelDescriptionEdit() {
@@ -74,32 +92,9 @@ export default function CaseSummaryTab(props: Props) {
   }
 
   return (
-    <div className="space-y-6">
-      <Card className="p-5">
-        <div
-          onFocus={() => setDescriptionEditing(true)}
-          onBlur={(e) => {
-            const wrapper = e.currentTarget;
-
-            window.requestAnimationFrame(() => {
-              const activeElement = document.activeElement;
-
-              if (activeElement && wrapper.contains(activeElement)) {
-                return;
-              }
-
-              const openMdxDropdown = document.querySelector(
-                "[role='listbox'], [role='menu'], [data-radix-popper-content-wrapper]"
-              );
-
-              if (openMdxDropdown) {
-                return;
-              }
-
-              setDescriptionEditing(false);
-            });
-          }}
-        >
+    <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,7fr)_minmax(280px,3fr)]">
+      <div className="min-w-0 space-y-4">
+      <Card className="min-w-0 p-5">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div className="text-lg font-semibold text-foreground">Description</div>
             {descriptionActionsVisible ? (
@@ -117,30 +112,38 @@ export default function CaseSummaryTab(props: Props) {
                   title="Cancel"
                 />
               </div>
-            ) : null}
+            ) : props.canUpdateCase ? <EditGenButton onClick={() => setDescriptionEditing(true)} disabled={props.busy} title="Edit description" /> : null}
           </div>
 
-          <MarkdownEditor
+          {descriptionActionsVisible ? <MarkdownEditor
+            alwaysShowToolbar
             value={props.editDescription ?? ""}
             onChange={(v) => props.setEditDescription(v)}
             disabled={props.busy || !props.canUpdateCase}
             placeholder="Write a description..."
             className="text-sm"
-          />
-        </div>
+          /> : <>
+            <div className={descriptionExpanded ? "min-w-0" : "max-h-96 min-w-0 overflow-hidden"}>
+              <div ref={descriptionContentRef} className="min-w-0 break-words [overflow-wrap:anywhere]">
+                {props.description ? <MarkdownRenderedContent markdown={props.description} /> : <span className="text-sm text-muted-foreground">No description</span>}
+              </div>
+            </div>
+            {descriptionOverflow ? <button type="button" aria-expanded={descriptionExpanded} className="mx-auto mt-2 block rounded-xl px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => setDescriptionExpanded(value => !value)}>{descriptionExpanded ? "Show less" : "Show more"}</button> : null}
+          </>}
       </Card>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
-        <div className="min-w-0">
           <Card className="p-5">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold text-foreground">Investigation</div>
+                <div className="flex items-center gap-2 text-lg font-semibold text-foreground">Investigation <span className="rounded-full border border-border bg-background px-2 text-xs font-normal text-muted-foreground">{props.comments.length}</span></div>
                 <div className="text-xs text-muted-foreground">Notes, decisions and case context</div>
               </div>
+              {!noteEditorOpen && props.canUpdateCase ? <NewGenButton onClick={() => setNoteEditorOpen(true)} disabled={props.busy} iconOnly={false} label="Add note" title="Add note" /> : null}
             </div>
 
+            {noteEditorOpen ? <div className="space-y-3">
             <MarkdownEditor
+              alwaysShowToolbar
               value={props.commentText}
               onChange={(v) => props.setCommentText(v)}
               disabled={props.busy || !props.canUpdateCase}
@@ -148,18 +151,21 @@ export default function CaseSummaryTab(props: Props) {
               className="text-sm text-foreground"
             />
 
+            <div className="flex justify-end gap-2">
+            <CancelButton onClick={() => { setNoteEditorOpen(false); props.setCommentText(""); }} disabled={props.busy} title="Cancel note" />
             <NewGenButton
-              onClick={props.submitComment}
+              onClick={publishNote}
               disabled={props.busy || !props.canUpdateCase || isRichTextEmpty(props.commentText)}
-              className="mt-3 w-full"
               iconOnly={false}
-              label="Add note"
-              title="Add note"
+              label="Publish"
+              title="Publish note"
             />
+            </div>
+            </div> : null}
 
             <div className="mt-5 space-y-3">
               {props.comments.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-8 text-center">
+                <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-3 text-center">
                   <div className="text-sm font-medium text-foreground">No note yet</div>
                   <div className="mt-1 text-xs text-muted-foreground">Add the first investigation note for this case.</div>
                 </div>
@@ -167,12 +173,18 @@ export default function CaseSummaryTab(props: Props) {
                 props.comments
                   .slice()
                   .reverse()
-                  .map((c) => (
-                    <div key={c.id} className="min-w-0 overflow-hidden rounded-2xl border border-border bg-background p-4 shadow-sm">
-                      <div className="flex min-w-0 items-center justify-between gap-3">
-                        <div className="min-w-0 break-words text-xs text-muted-foreground">
-                          {formatDate(c.created_at)}
-                          {c.author_display ? <span className="ml-1 text-muted-foreground/90">• {c.author_display}</span> : null}
+                  .map((c, index) => (
+                    <div key={c.id} className="relative grid min-w-0 grid-cols-[12px_28px_minmax(0,1fr)] gap-2 sm:gap-3">
+                      <div aria-hidden="true" className="relative flex justify-center">
+                        {index < props.comments.length - 1 ? <span className="absolute -bottom-3 top-6 border-l border-border" /> : null}
+                        <span className="relative mt-5 h-3 w-3 rounded-full border border-muted-foreground bg-card" />
+                      </div>
+                      <div className="mt-3"><UserAvatar showInitial name={c.author_display} /></div>
+                      <div className="min-w-0 rounded-2xl border border-border bg-background p-3 shadow-sm">
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <span className="break-words text-sm font-semibold text-foreground">{c.author_display || "Unknown author"}</span>
+                          <span className="text-xs text-muted-foreground">{formatDate(c.created_at)}</span>
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">
@@ -206,6 +218,7 @@ export default function CaseSummaryTab(props: Props) {
                       {props.editingCommentId === c.id ? (
                         <div className="mt-3">
                           <MarkdownEditor
+                            alwaysShowToolbar
                             value={props.editingText}
                             onChange={(v) => props.setEditingText(v)}
                             disabled={props.busy || !props.canUpdateCase || props.commentBusyId === c.id}
@@ -217,10 +230,11 @@ export default function CaseSummaryTab(props: Props) {
                         <div className="mt-3 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">
                           <MarkdownRenderedContent
                             markdown={String((c as any).text || "")}
-                            className="min-w-0 max-w-full"
+                            className="min-w-0 max-w-full !rounded-none !border-0 !bg-transparent !shadow-none [&_[contenteditable=false]]:!p-0"
                           />
                         </div>
                       )}
+                      </div>
                     </div>
                   ))
               )}
@@ -228,9 +242,9 @@ export default function CaseSummaryTab(props: Props) {
           </Card>
         </div>
 
-        <div className="space-y-6">
-          <Card className="p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="min-w-0 space-y-4">
+          <Card className="p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-foreground">Workbook</div>
                 <div className="text-xs text-muted-foreground">Checklist and investigation steps</div>
@@ -267,7 +281,7 @@ export default function CaseSummaryTab(props: Props) {
               {props.wbBusyApply ? <span className="text-xs text-muted-foreground">Saving…</span> : null}
             </div>
 
-            <div className="mt-4 space-y-2">
+            <div className="mt-3 space-y-2">
               {!props.workbook ? (
                 <div className="text-sm text-muted-foreground">No workbook applied.</div>
               ) : props.workbook.items.length === 0 ? (
@@ -298,8 +312,8 @@ export default function CaseSummaryTab(props: Props) {
             </div>
           </Card>
 
-          <Card className="p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
+          <Card className="p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold text-foreground">Linked alerts</div>
                 <div className="text-xs text-muted-foreground">Alerts currently merged into this case</div>
@@ -343,8 +357,8 @@ export default function CaseSummaryTab(props: Props) {
 
 
           {props.canViewTasks ? (
-            <Card className="p-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
+            <Card className="p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <div className="text-lg font-semibold text-foreground">Linked tasks</div>
                   <div className="text-xs text-muted-foreground">Tasks currently linked to this case</div>
@@ -381,13 +395,13 @@ export default function CaseSummaryTab(props: Props) {
           ) : null}
 
 
-          <Card className="p-5">
-            <div className="mb-4">
+          <Card className="p-4">
+            <div className="mb-3">
               <div className="text-lg font-semibold text-foreground">Attachments</div>
               <div className="text-xs text-muted-foreground">Files attached to this investigation</div>
             </div>
 
-            <label className="block cursor-pointer rounded-2xl border border-dashed border-border bg-background/50 p-5 text-center text-sm text-muted-foreground transition hover:bg-accent/40">
+            <label className="block cursor-pointer rounded-2xl border border-dashed border-border bg-background/50 p-3 text-center text-sm text-muted-foreground transition hover:bg-accent/40">
               <input
                 type="file"
                 className="hidden"
@@ -401,7 +415,7 @@ export default function CaseSummaryTab(props: Props) {
               Click to upload
             </label>
 
-            <div className="mt-4 space-y-2">
+            <div className="mt-3 space-y-2">
               {props.attachments.length === 0 ? (
                 <div className="text-sm text-muted-foreground">No attachment.</div>
               ) : (
@@ -434,7 +448,6 @@ export default function CaseSummaryTab(props: Props) {
             </div>
           </Card>
         </div>
-      </div>
     </div>
   );
 }

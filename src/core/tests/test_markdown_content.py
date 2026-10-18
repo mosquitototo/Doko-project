@@ -56,6 +56,20 @@ class SampleReportTemplateTests(SimpleTestCase):
 
 
 class MarkdownContentTests(SimpleTestCase):
+    def test_alert_comment_exposes_read_only_author_avatar(self):
+        from core.models import UserProfile
+
+        author = get_user_model()(username="alice")
+        UserProfile(user=author, avatar="avatars/alice.png")
+        comment = AlertComment(author=author, text="Note")
+        data = AlertCommentSerializer(comment).data
+        self.assertEqual(data["author_display"], "alice")
+        self.assertTrue(data["author_avatar_url"].endswith("/media/avatars/alice.png"))
+        self.assertTrue(AlertCommentSerializer().fields["author_avatar_url"].read_only)
+        author.profile.avatar = ""
+        self.assertIsNone(AlertCommentSerializer(comment).data["author_avatar_url"])
+        self.assertIsNone(AlertCommentSerializer(AlertComment(author_label="Automation")).data["author_avatar_url"])
+
     def test_reports_do_not_interpret_html_in_markdown_comments(self):
         for model, field in ((Comment, "text"), (AlertComment, "text"), (HuntJournalEntry, "text"),
                              (TaskComment, "text"), (Case, "description"), (Alert, "description"),

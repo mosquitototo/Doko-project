@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { DeleteButton, NewGenButton } from "../../components/ui/IconButton";
 import ConfirmDialog from "../ui/ConfirmDialog";
+import { Copy } from "lucide-react";
 
 type Row = { field?: string; value?: string; type?: string; status?: string };
 export type Normalized = { field: string; value: string; status?: string };
@@ -158,6 +159,7 @@ export default function KeyValueEditor({
   headerActions,
   confirmDeleteTitle,
   confirmDeleteMessage,
+  compact = false,
 }: {
   title: string;
   rows: Row[];
@@ -178,8 +180,10 @@ export default function KeyValueEditor({
   headerActions?: React.ReactNode;
   confirmDeleteTitle?: string;
   confirmDeleteMessage?: (row: Normalized, index: number) => React.ReactNode;
+  compact?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [local, setLocal] = useState<Normalized[]>(() => normalize(rows));
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmDeleteIndex, setConfirmDeleteIndex] = useState<number | null>(null);
@@ -325,7 +329,9 @@ export default function KeyValueEditor({
     onSelectedKeysChange!(next);
   }
 
-  const headerGridClass = hasSelection
+  const headerGridClass = compact && !hasSelection && !hasExtras && showStatus
+    ? "grid-cols-[minmax(70px,1fr)_minmax(100px,2fr)_100px_56px]"
+    : hasSelection
     ? hasExtras && showStatus
       ? "grid-cols-[28px_minmax(0,2fr)_minmax(0,3.2fr)_minmax(130px,1.2fr)_minmax(0,1.6fr)_92px]"
       : hasExtras
@@ -340,6 +346,21 @@ export default function KeyValueEditor({
         : showStatus
           ? "grid-cols-[minmax(0,2fr)_minmax(0,3.2fr)_minmax(130px,1.2fr)_92px]"
           : "grid-cols-[minmax(0,2fr)_minmax(0,3.2fr)_92px]";
+
+  const addButton = (
+    <NewGenButton
+      type="button"
+      disabled={disabled || busy}
+      onClick={async () => {
+        const next = [...local, { field: "", value: "", status: "" }];
+        setLocal(next);
+        if (compact) setExpanded(true);
+        else await save(next);
+      }}
+      title="Add row"
+      className="scale-90"
+    />
+  );
 
   return (
     <div className="space-y-3">
@@ -362,15 +383,18 @@ export default function KeyValueEditor({
       />
 
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className={compact ? "flex items-center gap-2" : ""}>
           <div className="text-lg font-semibold text-foreground">{title}</div>
-          <div className="text-xs text-muted-foreground">
+          <div className={compact ? "rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground" : "text-xs text-muted-foreground"}>
+            {compact ? rows.length : <>
             {local.length} row{local.length > 1 ? "s" : ""}
+            </>}
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           {headerActions}
+          {compact ? addButton : null}
 
           {enableCsvActions ? (
             <>
@@ -399,7 +423,8 @@ export default function KeyValueEditor({
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className={`${compact ? "overflow-x-auto" : "overflow-hidden"} rounded-2xl border border-border bg-card`}>
+        <div className={compact ? "min-w-[390px]" : ""}>
         <div className={`grid ${headerGridClass} gap-3 border-b border-border bg-background/70 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground`}>
           {hasSelection ? (
             <div className="flex items-center justify-center">
@@ -432,12 +457,12 @@ export default function KeyValueEditor({
               </div>
             </div>
           ) : (
-            local.map((r, i) => {
+            (compact && !expanded ? local.slice(0, 5) : local).map((r, i) => {
               const id = hasSelection ? rowIds[i] : "";
               const checked = hasSelection ? !!selectedKeys![id] : false;
 
               return (
-                <div key={i} className="border-b border-border last:border-b-0 px-4 py-2.5 transition hover:bg-accent/20">
+                <div key={i} className={`border-b border-border last:border-b-0 px-4 ${compact ? "py-1.5" : "py-2.5"} transition hover:bg-accent/20`}>
                   <div className={`grid ${headerGridClass} items-center gap-3`}>
                     {hasSelection ? (
                       <div className="flex items-center justify-center">
@@ -462,8 +487,10 @@ export default function KeyValueEditor({
                       }}
                     />
 
+                    <div className={compact ? "flex min-w-0 items-center gap-1" : "contents"}>
                     <InlineInput
                       value={r.value}
+                      title={r.value}
                       placeholder="value…"
                       disabled={disabled || busy}
                       onChange={(e) => setRow(i, { value: e.target.value })}
@@ -471,6 +498,11 @@ export default function KeyValueEditor({
                         void saveIfRowDirty(i, rows);
                       }}
                     />
+                    {compact ? <button type="button" title="Copy value" aria-label="Copy value" className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" onClick={async () => {
+                      try { await navigator.clipboard.writeText(r.value); }
+                      catch { window.alert("Unable to copy value"); }
+                    }}><Copy className="h-3.5 w-3.5" /></button> : null}
+                    </div>
 
                     {showStatus ? (
                       <InlineSelect
@@ -520,21 +552,11 @@ export default function KeyValueEditor({
             })
           )}
         </div>
+        </div>
       </div>
 
-      <div className="flex justify-end">
-        <NewGenButton
-          type="button"
-          disabled={disabled || busy}
-          onClick={async () => {
-            const next = [...local, { field: "", value: "", status: "" }];
-            setLocal(next);
-            await save(next);
-          }}
-          title="Add row"
-          className="scale-90"
-        />
-      </div>
+      {compact && local.length > 5 ? <button type="button" className="w-full rounded-xl py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "Show less" : `Show all ${title} (${local.length})`}</button> : null}
+      {!compact ? <div className="flex justify-end">{addButton}</div> : null}
       <ConfirmDialog
         open={confirmDeleteIndex !== null}
         title={confirmDeleteTitle || "Confirm"}

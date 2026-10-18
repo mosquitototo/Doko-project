@@ -388,10 +388,11 @@ class AlertSerializer(CustomerSubgroupAssignmentMixin, serializers.ModelSerializ
 
 class AlertCommentSerializer(serializers.ModelSerializer):
     author_display = serializers.SerializerMethodField()
+    author_avatar_url = serializers.ImageField(source="author.profile.avatar", read_only=True, default=None)
     
     class Meta:
         model = AlertComment
-        fields = ["id", "alert", "text", "created_at", "updated_at", "author_label", "author_display"]
+        fields = ["id", "alert", "text", "created_at", "updated_at", "author_label", "author_display", "author_avatar_url"]
         read_only_fields = ["id", "alert", "created_at", "updated_at"]
         extra_kwargs = {"text": {"trim_whitespace": False}}
 

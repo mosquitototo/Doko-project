@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import StatusBadge from "../../ui/StatusBadge";
 import SeverityBadge from "../../ui/SeverityBadge";
 import ClassificationBadge from "../../ui/ClassificationBadge";
@@ -31,7 +31,7 @@ type Props = {
   editableRef: React.RefObject<HTMLDivElement | null>;
   editTitle: string;
   setEditTitle: React.Dispatch<React.SetStateAction<string>>;
-  saveIfDirty: () => void | Promise<void>;
+  saveIfDirty: () => void | Promise<boolean>;
   changeStatus: (next: string) => void | Promise<void>;
   changeSeverity: (next: string) => void | Promise<void>;
   changeClassification: (next: string) => void | Promise<void>;
@@ -138,63 +138,6 @@ function InlineMutedBadge(props: { children: ReactNode }) {
   return <span className="inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground shadow-sm">{props.children}</span>;
 }
 
-function CaseSourcesInline(props: { sources: string[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!expanded) return;
-
-    function onPointerDown(e: MouseEvent) {
-      const el = rootRef.current;
-      if (!el) return;
-      if (e.target instanceof Node && !el.contains(e.target)) {
-        setExpanded(false);
-      }
-    }
-
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setExpanded(false);
-      }
-    }
-
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [expanded]);
-
-  const text = props.sources.length ? props.sources.join(", ") : "—";
-
-  return (
-    <div ref={rootRef} className="max-w-full min-w-0">
-      <button
-        type="button"
-        onClick={() => {
-          if (props.sources.length > 0) {
-            setExpanded((prev) => !prev);
-          }
-        }}
-        className={[
-          "max-w-full border-none bg-transparent p-0 text-right text-xs italic text-muted-foreground",
-          props.sources.length > 0 ? "cursor-pointer hover:text-foreground" : "cursor-default",
-        ].join(" ")}
-        title={props.sources.length > 0 ? text : undefined}
-      >
-        <span className="font-medium">Case source: </span>
-        <span className={expanded ? "whitespace-normal break-words" : "inline-block max-w-[360px] truncate align-bottom"}>
-          {text}
-        </span>
-      </button>
-    </div>
-  );
-}
-
-
 export default function CaseHeader(props: Props) {
   const navigate = useNavigate();
   const [titleActionsVisible, setTitleActionsVisible] = useState(false);
@@ -223,29 +166,29 @@ export default function CaseHeader(props: Props) {
 
   return (
     <>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Last update {formatDate((props.caseItem as any).updated_at)}</span>
-        <span className="font-mono">Case {props.caseItem.id}</span>
-      </div>
+      <nav aria-label="Case navigation" className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border pb-2 text-xs text-muted-foreground">
+        <div className="flex min-w-0 basis-full items-center gap-2 sm:flex-1 sm:basis-0 sm:pr-8">
+          <LeftButton onClick={() => navigate("/cases")} title="Back" iconOnly className="h-8 w-8 shrink-0 border-transparent bg-transparent p-1 shadow-none" />
+          <Link to="/cases" className="hover:underline">Cases</Link>
+          <span aria-hidden="true">›</span>
+          <span className="min-w-0 max-w-lg truncate" title={currentTitle}>{currentTitle}</span>
+        </div>
+        <div className="ml-auto max-w-full text-right leading-4">
+          <div className="break-all text-[10px] leading-4">Case ID: {props.caseItem.id}</div>
+          <div className="text-[10px] italic leading-4">Last update {formatDate((props.caseItem as any).updated_at)}</div>
+        </div>
+      </nav>
 
-      <div className="flex flex-col gap-6 xl:grid xl:grid-cols-[minmax(0,1fr)_auto] xl:gap-x-6 xl:gap-y-0">
+      <div className="!mt-3 flex min-w-0 flex-col gap-4 xl:grid xl:grid-cols-[minmax(0,1fr)_auto] xl:gap-x-6">
         <div className="min-w-0 xl:contents">
           <div className="min-w-0 xl:col-start-1 xl:row-start-1">
-          <div className="mb-1 flex h-8 items-center">
-            <LeftButton
-              onClick={() => navigate("/cases")}
-              title="Back"
-              iconOnly
-              className="px-1 py-1 h-fit min-h-0 line-height-none"
-            />
-          </div>
           <div
             ref={props.editableRef}
             contentEditable={props.canUpdateCase && !props.busy}
             role="textbox"
             tabIndex={0}
             suppressContentEditableWarning
-            className="text-3xl font-semibold tracking-tight text-foreground outline-none px-1 py-0.5 rounded-md hover:bg-accent/40 focus:bg-accent/40 cursor-text"
+            className="min-w-0 break-words text-2xl font-semibold tracking-tight text-foreground outline-none px-1 py-0.5 rounded-md hover:bg-accent/40 focus:bg-accent/40 cursor-text [overflow-wrap:anywhere]"
             onInput={(e) => {
               setTitleActionsVisible(true);
               props.setEditTitle(e.currentTarget.textContent || "");
@@ -275,7 +218,7 @@ export default function CaseHeader(props: Props) {
             </div>
           ) : null}
 
-          <div className="py-2">
+          <div className="mt-4">
             <div className="flex flex-wrap items-center gap-2">
               {(props.caseItem as any).case_number ? <span className="text-sm font-medium text-muted-foreground">#{(props.caseItem as any).case_number}</span> : null}
               <CustomerScopeBadge
@@ -301,7 +244,7 @@ export default function CaseHeader(props: Props) {
           </div>
 
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-4 text-sm xl:col-start-1 xl:row-start-2">
+          <div className="flex flex-wrap items-center gap-4 text-sm xl:col-start-1 xl:row-start-2">
             <div className="flex items-center gap-2">
               <Workflow className="size-4 text-muted-foreground" />
               <InlineEditableBadge
@@ -337,7 +280,7 @@ export default function CaseHeader(props: Props) {
                 display={<ClassificationBadge value={(props.caseItem as any).classification} />}
               />
             </div>
-
+            <span className="break-words text-xs italic text-muted-foreground [overflow-wrap:anywhere]">Case source: {caseSources.length ? caseSources.join(", ") : "—"}</span>
 
           </div>
         </div>
@@ -400,9 +343,8 @@ export default function CaseHeader(props: Props) {
               {props.reportBusy ? "Generating…" : "Gen PDF"}
             </button>
           </div>
-          <CaseSourcesInline sources={caseSources} />
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-4 text-sm xl:col-start-2 xl:row-start-2 xl:mt-4">
+          <div className="flex flex-wrap items-center justify-end gap-4 text-sm xl:col-start-2 xl:row-start-2">
             <div className="flex items-center gap-2">
               <Info className="size-4 text-muted-foreground" />
               <InlineEditableBadge

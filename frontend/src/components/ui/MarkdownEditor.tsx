@@ -41,6 +41,7 @@ type Props = {
   disabled?: boolean;
   placeholder?: string;
   className?: string;
+  alwaysShowToolbar?: boolean;
 };
 
 export default function MarkdownEditor(props: Props) {
@@ -170,7 +171,7 @@ export default function MarkdownEditor(props: Props) {
     <div
       ref={rootRef}
       data-markdown-editor-root
-      data-toolbar-visible={toolbarVisible ? "true" : "false"}
+      data-toolbar-visible={props.alwaysShowToolbar || toolbarVisible ? "true" : "false"}
       className={[
         "markdown-editor overflow-hidden rounded-2xl border border-border bg-card text-sm text-foreground shadow-sm transition",
         props.disabled ? "opacity-60" : "",
@@ -503,8 +504,7 @@ export default function MarkdownEditor(props: Props) {
           color: hsl(var(--accent-foreground));
         }
 
-        .markdown-editor code:not(.cm-line code),
-        .markdown-rendered-content code:not(.cm-line code) {
+        .markdown-editor code:not(.cm-line code) {
           background: hsl(var(--muted)) !important;
           color: hsl(var(--foreground)) !important;
           border: 1px solid hsl(var(--border));
@@ -514,19 +514,14 @@ export default function MarkdownEditor(props: Props) {
 
         .markdown-editor [contenteditable="true"] code,
         .markdown-editor [contenteditable="true"] code span,
-        .markdown-editor [contenteditable="true"] span[style*="background-color"],
-        .markdown-rendered-content code,
-        .markdown-rendered-content code span,
-        .markdown-rendered-content span[style*="background-color"] {
+        .markdown-editor [contenteditable="true"] span[style*="background-color"] {
           background: transparent !important;
           background-color: transparent !important;
           color: hsl(var(--foreground)) !important;
         }
 
         .markdown-editor pre code,
-        .markdown-rendered-content pre code,
-        .markdown-editor .cm-content,
-        .markdown-rendered-content .cm-content {
+        .markdown-editor .cm-content {
           background: transparent !important;
           border: 0;
           padding: 0;

@@ -250,6 +250,39 @@ function InlineTextBadge(props: { children: ReactNode }) {
   );
 }
 
+function HuntTextPreview({ text }: { text: string }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const measure = () => setOverflowing(content.scrollHeight > 192);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [text]);
+
+  return (
+    <>
+      <div className={expanded ? "" : "max-h-48 overflow-hidden"}>
+        <div ref={contentRef} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm text-foreground">
+          {text || "—"}
+        </div>
+      </div>
+      {overflowing && (
+        <div className="mt-3 flex justify-center">
+          <button type="button" className="text-sm text-primary hover:underline" onClick={() => setExpanded(value => !value)}>
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function HuntDetailPage() {
   const { id } = useParams();
   const huntId = id || "";
@@ -288,6 +321,9 @@ export default function HuntDetailPage() {
 
   const [newJournalType, setNewJournalType] = useState("note");
   const [newJournalText, setNewJournalText] = useState("");
+  const [newJournalOpen, setNewJournalOpen] = useState(false);
+  const [contextEditing, setContextEditing] = useState(false);
+  const [conclusionEditing, setConclusionEditing] = useState(false);
 
   const [editContext, setEditContext] = useState("");
   const [editConclusion, setEditConclusion] = useState("");
@@ -511,7 +547,10 @@ export default function HuntDetailPage() {
 
     const nextContext = context ?? editContext;
 
-    if ((hunt.context || "") === nextContext) return;
+    if ((hunt.context || "") === nextContext) {
+      setContextEditing(false);
+      return;
+    }
 
     setContextSaving(true);
     try {
@@ -519,6 +558,7 @@ export default function HuntDetailPage() {
       setHunt((prev) => (prev ? { ...prev, context: nextContext } : prev));
       setEditContext(nextContext);
       setContextSavedAt(Date.now());
+      setContextEditing(false);
     } catch (e: any) {
       push({
         kind: "error",
@@ -538,7 +578,10 @@ export default function HuntDetailPage() {
 
     const nextConclusion = conclusion ?? editConclusion;
 
-    if ((hunt.conclusion || "") === nextConclusion) return;
+    if ((hunt.conclusion || "") === nextConclusion) {
+      setConclusionEditing(false);
+      return;
+    }
 
     setConclusionSaving(true);
     try {
@@ -546,6 +589,7 @@ export default function HuntDetailPage() {
       setHunt((prev) => (prev ? { ...prev, conclusion: nextConclusion } : prev));
       setEditConclusion(nextConclusion);
       setConclusionSavedAt(Date.now());
+      setConclusionEditing(false);
     } catch (e: any) {
       push({
         kind: "error",
@@ -781,25 +825,22 @@ export default function HuntDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="text-xs italic text-muted-foreground">
-          Last update {formatDate(hunt.updated_at)}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-border pb-2">
+        <div className="flex min-w-0 basis-full items-center gap-3 sm:flex-1 sm:basis-0 sm:pr-8">
+          <LeftButton onClick={() => navigate("/hunts")} title="Back" iconOnly className="h-8 w-8 shrink-0 border-0 bg-transparent p-1 shadow-none" />
+          <div className="flex min-w-0 max-w-lg items-center gap-2 text-sm">
+            <Link to="/hunts" className="shrink-0 text-muted-foreground hover:text-foreground">Hunts</Link>
+            <span className="text-muted-foreground">›</span>
+            <span className="truncate" title={hunt.title}>{hunt.title}</span>
+          </div>
         </div>
-        <div className="text-[10px] italic text-muted-foreground">
-          Hunt ID {hunt.id}
+        <div className="shrink-0 text-right text-[10px] leading-4 italic text-muted-foreground">
+          <div>Hunt ID {hunt.id}</div>
+          <div>Last update {formatDate(hunt.updated_at)}</div>
         </div>
       </div>
-      <div>
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div className="mb-1 flex h-6 items-center">
-            <LeftButton
-              onClick={() => navigate("/hunts")}
-              title="Back"
-              iconOnly
-              className="px-1 py-1 h-fit min-h-0 line-height-none"
-            />
-          </div>
-
+      <div className="!mt-3 grid min-w-0 items-start gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="sm:col-start-2 sm:row-start-1">
           <div className="flex flex-wrap items-center gap-2 xl:justify-end">
             <ArchiveButton
               variant={isArchived ? "success" : "warning"}
@@ -825,7 +866,7 @@ export default function HuntDetailPage() {
           role="textbox"
           tabIndex={0}
           suppressContentEditableWarning
-          className="truncate text-3xl font-semibold tracking-tight text-foreground outline-none px-1 py-0.5 rounded-md hover:bg-accent/40 focus:bg-accent/40 cursor-text"
+          className="min-w-0 break-words [overflow-wrap:anywhere] text-2xl font-semibold tracking-tight text-foreground outline-none px-1 py-0.5 rounded-md hover:bg-accent/40 focus:bg-accent/40 cursor-text sm:col-start-1 sm:row-start-1"
           onInput={(e) => {
             setTitleActionsVisible(true);
             setEditTitle(e.currentTarget.textContent || "");
@@ -1025,7 +1066,7 @@ export default function HuntDetailPage() {
         </div>
       </Card>
 
-      <div className="flex gap-2">
+      <div className="flex gap-1.5 overflow-x-auto py-1">
         {[
           { k: "journal", label: "Journal" },
           { k: "iocs", label: "IoCs" },
@@ -1036,7 +1077,7 @@ export default function HuntDetailPage() {
             key={t.k}
             type="button"
             className={[
-              "flex-1 border-none py-3 text-sm hover:bg-slate-800 hover:text-white font-semibold cursor-pointer transition-all duration-200 rounded-xl border-2 hover:-translate-y-1 active:scale-95",
+              "flex-1 shrink-0 whitespace-nowrap border-none px-3 py-2 text-sm hover:bg-slate-800 hover:text-white font-semibold cursor-pointer transition-all duration-200 rounded-xl border-2 hover:-translate-y-1 active:scale-95",
               tab === t.k
                 ? "bg-slate-800 text-white shadow-md hover:shadow-xl transform auto-scale-95"
                 : "border-gray-100 bg-white shadow-md hover:shadow-xl hover:bg-slate-100 text-slate-500 hover:border-gray-300 hover:text-slate-700",
@@ -1052,11 +1093,15 @@ export default function HuntDetailPage() {
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="space-y-6 lg:col-span-2 min-w-0">
             <Card className="p-5">
-              <div className="mb-4 text-lg font-semibold text-foreground">
-                New journal entry
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-lg font-semibold text-foreground">
+                  Journal <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs">{journal.length}</span>
+                </div>
+                <NewGenButton title="Add entry" onClick={() => setNewJournalOpen(true)} disabled={busy || !canManageHunt || newJournalOpen} />
               </div>
 
-              <div className="space-y-3">
+              {newJournalOpen && <div className="mb-5 space-y-3 rounded-2xl border border-border p-4">
+                <div className="text-sm font-semibold">New journal entry</div>
                 <select
                   className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
                   value={newJournalType}
@@ -1070,6 +1115,7 @@ export default function HuntDetailPage() {
                 </select>
 
                 <MarkdownEditor
+                  alwaysShowToolbar
                   value={newJournalText}
                   onChange={(v) => setNewJournalText(v)}
                   disabled={busy || !canManageHunt}
@@ -1077,6 +1123,8 @@ export default function HuntDetailPage() {
                   className="text-sm text-foreground"
                 />
 
+                <div className="flex justify-end gap-2">
+                <CancelButton title="Cancel" disabled={busy} onClick={() => { setNewJournalOpen(false); setNewJournalText(""); }} />
                 <NewGenButton
                   type="button"
                   onClick={async () => {
@@ -1090,6 +1138,7 @@ export default function HuntDetailPage() {
                       });
                       push({ kind: "success", title: "Entry added" });
                       setNewJournalText("");
+                      setNewJournalOpen(false);
                       await refreshAll();
                     } catch (e: any) {
                       push({
@@ -1107,16 +1156,9 @@ export default function HuntDetailPage() {
                   }}
                   disabled={busy || !canManageHunt || isRichTextEmpty(newJournalText)}
                   title="Add entry"
-                  className="w-full"
                 />
-              </div>
-            </Card>
-
-            <Card className="p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="text-lg font-semibold text-foreground">Journal</div>
-                <div className="text-xs text-muted-foreground">{journal.length}</div>
-              </div>
+                </div>
+              </div>}
 
               {journal.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-8 text-center">
@@ -1128,7 +1170,7 @@ export default function HuntDetailPage() {
                   </div>
                 </div>
               ) : (
-                <div className="space-y-3">
+                <div className="ml-2 space-y-3 border-l border-border pl-5">
                   {journal
                     .slice()
                     .reverse()
@@ -1139,21 +1181,18 @@ export default function HuntDetailPage() {
                       return (
                         <div
                           key={entry.id}
-                          className={`rounded-2xl border border-border p-4 ${journalEntryTone(
-                            entry.entry_type
-                          )}`}
+                          className="relative min-w-0 rounded-2xl border border-border bg-background/50 p-4 before:absolute before:-left-[27px] before:top-5 before:size-3 before:rounded-full before:border before:border-muted-foreground before:bg-card"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="min-w-0">
-                              <div className="text-xs text-muted-foreground">
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                <span className={`rounded-full px-2.5 py-1 font-medium text-foreground ${journalEntryTone(entry.entry_type)}`}>
                                 {JOURNAL_TYPE_OPTIONS.find(
                                   (x) => x.value === entry.entry_type
                                 )?.label ?? entry.entry_type}
-                                {" • "}
+                                </span>
+                                {entry.author_username && <span className="font-medium text-foreground">{entry.author_username}</span>}
                                 {formatDate(entry.occurred_at)}
-                                {entry.author_username
-                                  ? ` • ${entry.author_username}`
-                                  : ""}
                               </div>
                             </div>
 
@@ -1230,6 +1269,7 @@ export default function HuntDetailPage() {
                               </select>
 
                               <MarkdownEditor
+                                alwaysShowToolbar
                                 value={editingJournalText}
                                 onChange={(next) => setEditingJournalText(next)}
                                 disabled={busy || !canManageHunt || journalBusyId === entry.id}
@@ -1323,9 +1363,11 @@ export default function HuntDetailPage() {
                 <div className="text-xs text-muted-foreground">
                   {contextSaving ? "Saving…" : contextSavedAt ? "Saved" : ""}
                 </div>
+                {!contextEditing && <EditGenButton title="Edit context" disabled={busy || !canManageHunt} onClick={() => setContextEditing(true)} />}
               </div>
 
-              <textarea
+              {contextEditing ? <textarea
+                autoFocus
                 value={editContext}
                 onChange={(e) => setEditContext(e.target.value)}
                 onBlur={() => {
@@ -1335,10 +1377,10 @@ export default function HuntDetailPage() {
 
                   void autosaveContext(editContext);
                 }}
-                disabled={busy || !canManageHunt}
+                disabled={busy || contextSaving || !canManageHunt}
                 placeholder="Investigation context and objective…"
                 className="min-h-[140px] w-full resize-y rounded-2xl border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-              />
+              /> : <HuntTextPreview text={editContext} />}
             </Card>
 
             <Card className="p-5">
@@ -1349,9 +1391,11 @@ export default function HuntDetailPage() {
                 <div className="text-xs text-muted-foreground">
                   {conclusionSaving ? "Saving…" : conclusionSavedAt ? "Saved" : ""}
                 </div>
+                {!conclusionEditing && <EditGenButton title="Edit conclusion" disabled={busy || !canManageHunt} onClick={() => setConclusionEditing(true)} />}
               </div>
 
-              <textarea
+              {conclusionEditing ? <textarea
+                autoFocus
                 value={editConclusion}
                 onChange={(e) => setEditConclusion(e.target.value)}
                 onBlur={() => {
@@ -1361,10 +1405,10 @@ export default function HuntDetailPage() {
 
                   void autosaveConclusion(editConclusion);
                 }}
-                disabled={busy || !canManageHunt}
+                disabled={busy || conclusionSaving || !canManageHunt}
                 placeholder="Final conclusion…"
                 className="min-h-[140px] w-full resize-y rounded-2xl border border-border bg-card px-4 py-3 text-sm text-foreground outline-none transition placeholder:text-muted-foreground focus:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-              />
+              /> : <HuntTextPreview text={editConclusion} />}
             </Card>
 
             <Card className="p-5">
