@@ -56,6 +56,20 @@ class SampleReportTemplateTests(SimpleTestCase):
 
 
 class MarkdownContentTests(SimpleTestCase):
+    def test_case_comment_exposes_read_only_author_avatar(self):
+        from core.models import UserProfile
+
+        author = get_user_model()(username="alice")
+        UserProfile(user=author, avatar="avatars/alice.png")
+        comment = Comment(author=author, text="Note")
+        data = CommentSerializer(comment).data
+        self.assertEqual(data["author_display"], "alice")
+        self.assertTrue(data["author_avatar_url"].endswith("/media/avatars/alice.png"))
+        self.assertTrue(CommentSerializer().fields["author_avatar_url"].read_only)
+        author.profile.avatar = ""
+        self.assertIsNone(CommentSerializer(comment).data["author_avatar_url"])
+        self.assertIsNone(CommentSerializer(Comment(author_label="Automation")).data["author_avatar_url"])
+
     def test_alert_comment_exposes_read_only_author_avatar(self):
         from core.models import UserProfile
 

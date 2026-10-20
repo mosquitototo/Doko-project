@@ -868,10 +868,11 @@ class CommentSerializer(serializers.ModelSerializer):
     customer_id = serializers.UUIDField(source="case.customer.id", read_only=True)
     customer_name = serializers.CharField(source="case.customer.name", read_only=True)
     author_display = serializers.SerializerMethodField()
+    author_avatar_url = serializers.ImageField(source="author.profile.avatar", read_only=True, default=None)
 
     class Meta:
         model = Comment
-        fields = ["id", "case", "author", "text", "created_at", "updated_at", "customer_id", "customer_name", "author_display"]
+        fields = ["id", "case", "author", "text", "created_at", "updated_at", "customer_id", "customer_name", "author_display", "author_avatar_url"]
         read_only_fields = ["id", "case", "author", "created_at", "updated_at"]
         extra_kwargs = {"text": {"trim_whitespace": False}}
 

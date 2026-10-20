@@ -17,6 +17,7 @@ export type Comment = {
   text: string;
   author: number;
   author_display?: string
+  author_avatar_url?: string | null;
   created_at: string;
 };
 

@@ -79,6 +79,7 @@ export default function InstanceSettings() {
   const [auditFormat, setAuditFormat] = useState<"csv" | "jsonl">("csv");
 
   const [splunkEnabled, setSplunkEnabled] = useState(false);
+  const [splunkVerifySsl, setSplunkVerifySsl] = useState(true);
   const [splunkEndpoint, setSplunkEndpoint] = useState("");
   const [splunkToken, setSplunkToken] = useState("");
   const [splunkIndex, setSplunkIndex] = useState("");
@@ -126,6 +127,7 @@ export default function InstanceSettings() {
         setProxyPassword("");
 
         setSplunkEnabled(!!data.splunk_hec?.enabled);
+        setSplunkVerifySsl(data.splunk_hec?.verify_ssl ?? true);
         setSplunkEndpoint(data.splunk_hec?.endpoint || "");
         setSplunkToken("");
         setSplunkIndex(data.splunk_hec?.index || "");
@@ -348,6 +350,7 @@ export default function InstanceSettings() {
     try {
       await saveSplunkHecSettings({
         enabled: splunkEnabled,
+        verify_ssl: splunkVerifySsl,
         endpoint: normalizedSplunkEndpoint,
         ...(splunkToken ? { token: splunkToken } : {}),
         index: splunkIndex.trim(),
@@ -390,6 +393,7 @@ export default function InstanceSettings() {
     try {
       const result = await testSplunkHecConnection({
         enabled: splunkEnabled,
+        verify_ssl: splunkVerifySsl,
         endpoint: normalizedSplunkEndpoint,
         ...(splunkToken ? { token: splunkToken } : {}),
         index: splunkIndex.trim(),
@@ -788,6 +792,16 @@ export default function InstanceSettings() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex shrink-0 items-center gap-2 text-xs text-foreground">
+              <input
+                type="checkbox"
+                checked={splunkEnabled}
+                onChange={(e) => setSplunkEnabled(e.target.checked)}
+                disabled={busySplunk || busySplunkTest}
+                className="h-4 w-4 accent-primary"
+              />
+              Enabled
+            </label>
             <button
               type="button"
               onClick={onTestSplunk}
@@ -808,21 +822,9 @@ export default function InstanceSettings() {
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="grid gap-1">
-            <FieldLabel>Enabled</FieldLabel>
-            <select
-              className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
-              value={splunkEnabled ? "1" : "0"}
-              onChange={(e) => setSplunkEnabled(e.target.value === "1")}
-              disabled={busySplunk}
-            >
-              <option value="0">Disabled</option>
-              <option value="1">Enabled</option>
-            </select>
-          </label>
-
-          <label className="grid gap-1">
+        <div className="grid gap-4 sm:grid-cols-6">
+          <div className="flex min-w-0 items-end gap-3 sm:col-span-3">
+          <label className="grid min-w-0 flex-1 gap-1">
             <FieldLabel>HEC endpoint</FieldLabel>
             <input
               className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
@@ -832,8 +834,19 @@ export default function InstanceSettings() {
               disabled={busySplunk}
             />
           </label>
+          <label className="mb-3 inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-foreground">
+            <input
+              type="checkbox"
+              checked={splunkVerifySsl}
+              onChange={(e) => setSplunkVerifySsl(e.target.checked)}
+              disabled={busySplunk || busySplunkTest}
+              className="h-4 w-4 accent-primary"
+            />
+            Verify SSL
+          </label>
+          </div>
 
-          <label className="grid gap-1 sm:col-span-2">
+          <label className="grid gap-1 sm:col-span-3">
             <FieldLabel>HEC token</FieldLabel>
             <input
               type="password"
@@ -846,7 +859,7 @@ export default function InstanceSettings() {
             />
           </label>
 
-          <label className="grid gap-1">
+          <label className="grid gap-1 sm:col-span-2">
             <FieldLabel>Index</FieldLabel>
             <input
               className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"
@@ -857,7 +870,7 @@ export default function InstanceSettings() {
             />
           </label>
 
-          <label className="grid gap-1">
+          <label className="grid gap-1 sm:col-span-2">
             <FieldLabel>Source</FieldLabel>
             <input
               className="h-10 w-full rounded-2xl border border-border bg-card px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/20"

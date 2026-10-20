@@ -16,6 +16,7 @@ export type InstanceSettingsPayload = {
   };
   splunk_hec?: {
     enabled: boolean;
+    verify_ssl?: boolean;
     endpoint: string;
     has_token?: boolean;
     index: string;
@@ -131,6 +132,7 @@ export async function downloadAuditExport(filename: string): Promise<Blob> {
 
 export async function saveSplunkHecSettings(payload: {
   enabled: boolean;
+  verify_ssl?: boolean;
   endpoint: string;
   token?: string;
   index: string;
@@ -148,6 +150,7 @@ export async function saveSplunkHecSettings(payload: {
 
 export async function testSplunkHecConnection(payload: {
   enabled: boolean;
+  verify_ssl?: boolean;
   endpoint: string;
   token?: string;
   index: string;

@@ -86,6 +86,7 @@ def send_payload_to_splunk_hec(settings_obj: InstanceSplunkHecSettings, payload:
             },
             json=payload,
             timeout=10,
+            verify=settings_obj.verify_ssl,
             proxies=build_outbound_proxies(),
         )
     except requests.RequestException as exc:
@@ -111,6 +112,7 @@ def test_splunk_hec_connection(payload: dict[str, Any]) -> tuple[bool, str]:
     settings_obj = InstanceSplunkHecSettings()
     settings_obj.enabled = True
     settings_obj.endpoint = (payload.get("endpoint") or "").strip()
+    settings_obj.verify_ssl = payload.get("verify_ssl", True)
     settings_obj.index = (payload.get("index") or "").strip()
     settings_obj.source = ((payload.get("source") or "doko:audit").strip() or "doko:audit")
     settings_obj.sourcetype = ((payload.get("sourcetype") or "_json").strip() or "_json")

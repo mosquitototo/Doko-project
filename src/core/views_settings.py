@@ -200,6 +200,7 @@ def _normalize_splunk_hec_payload(data):
     return {
         "enabled": _parse_bool(pick("enabled", default=False)),
         "endpoint": str(pick("endpoint", "hec_endpoint", "hecEndpoint")).strip(),
+        "verify_ssl": _parse_bool(pick("verify_ssl")) if pick("verify_ssl", default=None) is not None else None,
         "token": str(pick("token", "hec_token", "hecToken")).strip(),
         "index": str(pick("index")).strip(),
         "source": (str(pick("source", default="doko:audit")).strip() or "doko:audit"),
@@ -1565,6 +1566,7 @@ class InstanceSettingsView(APIView):
                 "splunk_hec": {
                     "enabled": bool(splunk_hec.get("enabled", False)),
                     "endpoint": splunk_hec.get("endpoint", "") or "",
+                    "verify_ssl": bool(splunk_hec.get("verify_ssl", True)),
                     "has_token": bool(splunk_hec.get("has_token", False)),
                     "index": splunk_hec.get("index", "") or "",
                     "source": splunk_hec.get("source", "doko:audit") or "doko:audit",
@@ -1755,6 +1757,8 @@ class InstanceSplunkHecSettingsView(APIView):
 
         obj.enabled = next_enabled
         obj.endpoint = next_endpoint
+        if payload["verify_ssl"] is not None:
+            obj.verify_ssl = payload["verify_ssl"]
         obj.index = payload["index"]
         obj.source = payload["source"]
         obj.sourcetype = payload["sourcetype"]
@@ -1786,6 +1790,8 @@ class InstanceSplunkHecTestView(APIView):
     def post(self, request):
         payload = _normalize_splunk_hec_payload(request.data or {})
         obj = InstanceSplunkHecSettings.get_solo()
+        if payload["verify_ssl"] is None:
+            payload["verify_ssl"] = obj.verify_ssl
 
         if not payload["endpoint"]:
             payload["endpoint"] = obj.endpoint or ""

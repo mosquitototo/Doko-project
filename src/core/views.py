@@ -2768,7 +2768,7 @@ class CommentListCreateForCaseView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         event = self.get_case()
-        return Comment.objects.filter(case=event).order_by("created_at")
+        return Comment.objects.filter(case=event).select_related("author__profile").order_by("created_at")
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()

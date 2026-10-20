@@ -179,7 +179,7 @@ export default function CaseSummaryTab(props: Props) {
                         {index < props.comments.length - 1 ? <span className="absolute -bottom-3 top-6 border-l border-border" /> : null}
                         <span className="relative mt-5 h-3 w-3 rounded-full border border-muted-foreground bg-card" />
                       </div>
-                      <div className="mt-3"><UserAvatar showInitial name={c.author_display} /></div>
+                      <div className="mt-3"><UserAvatar showInitial name={c.author_display} src={c.author_avatar_url} /></div>
                       <div className="min-w-0 rounded-2xl border border-border bg-background p-3 shadow-sm">
                       <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">

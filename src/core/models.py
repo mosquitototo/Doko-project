@@ -1815,6 +1815,7 @@ class InstanceSplunkHecSettings(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     enabled = models.BooleanField(default=False)
     endpoint = models.URLField(max_length=500, blank=True, default="")
+    verify_ssl = models.BooleanField(default=True)
     token_secret_ref = models.TextField(blank=True, default="")
     index = models.CharField(max_length=120, blank=True, default="")
     source = models.CharField(max_length=200, blank=True, default="doko:audit")
@@ -1857,6 +1858,7 @@ class InstanceSplunkHecSettings(models.Model):
             "enabled": self.enabled,
             "endpoint": self.endpoint or "",
             "has_token": bool(self.token_secret_ref),
+            "verify_ssl": self.verify_ssl,
             "index": self.index or "",
             "source": self.source or "doko:audit",
             "sourcetype": self.sourcetype or "_json",
