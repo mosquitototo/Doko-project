@@ -1,4 +1,5 @@
 import uuid
+import logging
 from pathlib import PurePath
 
 from django.conf import settings
@@ -43,8 +44,8 @@ class Alert(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    classification = models.CharField(max_length=100, default="generic")
-    severity = models.CharField(max_length=20, choices=Severity.choices, default=Severity.MEDIUM)
+    classification = models.CharField(max_length=120, default="generic")
+    severity = models.CharField(max_length=50, default=Severity.MEDIUM)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)
     status_before_merge = models.CharField(max_length=20, choices=Status.choices, blank=True, default="")
     source = models.CharField(max_length=200, blank=True)
@@ -161,8 +162,8 @@ class Case(models.Model):
         UKN = "unknown", "Unknown"
 
     status = models.CharField(max_length=30, choices=Status.choices, default=Status.OPEN, db_index=True,)
-    classification = models.CharField(max_length=100, default="generic")
-    severity = models.CharField(max_length=20, choices=Severity.choices, default=Severity.MEDIUM)
+    classification = models.CharField(max_length=120, default="generic")
+    severity = models.CharField(max_length=50, default=Severity.MEDIUM)
     outcome = models.CharField(max_length=50, choices=Outcome.choices, default=Outcome.UKN, db_index=True,)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
@@ -562,8 +563,12 @@ def queue_audit_log_splunk_hec_export(sender, instance: AuditLog, created: bool,
                 args=[audit_log_id],
                 retry=False,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Splunk HEC export could not be queued for audit %s (%s). The local audit is preserved; no automatic replay is scheduled.",
+                audit_log_id,
+                type(exc).__name__,
+            )
 
     transaction.on_commit(enqueue)
 
@@ -648,17 +653,29 @@ class UserRole(models.Model):
 
 
 class Severity(models.Model):
+    class Color(models.TextChoices):
+        GRAY = "gray", "Gray"
+        CYAN = "cyan", "Cyan"
+        BLUE = "blue", "Blue"
+        VIOLET = "violet", "Violet"
+        PINK = "pink", "Pink"
+        EMERALD = "emerald", "Emerald"
+        AMBER = "amber", "Amber"
+        ORANGE = "orange", "Orange"
+        RED = "red", "Red"
+
     code = models.CharField(max_length=50, unique=True)
-    label = models.CharField(max_length=100)
+    label = models.CharField(max_length=50)
     order = models.IntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    color = models.CharField(max_length=12, choices=Color.choices, default=Color.GRAY)
 
     def __str__(self):
         return self.label
 
 
 class Classification(models.Model):
-    code = models.CharField(max_length=80, unique=True)
+    code = models.CharField(max_length=120, unique=True)
     label = models.CharField(max_length=120)
     is_active = models.BooleanField(default=True)
 

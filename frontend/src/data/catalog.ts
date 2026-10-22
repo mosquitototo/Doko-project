@@ -1,14 +1,17 @@
 import { listSeverities, listClassifications, type SeverityItem, type ClassificationItem } from "../api/dataModels";
+import { legacySeverityColor } from "../components/ui/severityColors";
 
 type Catalog = {
   severities: SeverityItem[];
   classifications: ClassificationItem[];
   bySeverityCode: Record<string, string>;
   byClassificationCode: Record<string, string>;
+  severityColorsByCode: Record<string, string>;
 };
 
 let cached: Catalog | null = null;
 let inflight: Promise<Catalog> | null = null;
+export const CATALOG_CHANGED_EVENT = "doko:catalog-changed";
 
 function build(severities: SeverityItem[], classifications: ClassificationItem[]): Catalog {
   const s = severities.filter(x => x.is_active);
@@ -19,6 +22,7 @@ function build(severities: SeverityItem[], classifications: ClassificationItem[]
     classifications: c,
     bySeverityCode: Object.fromEntries(s.map(x => [x.code, x.label])),
     byClassificationCode: Object.fromEntries(c.map(x => [x.code, x.label])),
+    severityColorsByCode: Object.fromEntries(severities.map(x => [x.code, x.color ?? legacySeverityColor(x.code)])),
   };
 }
 
@@ -26,21 +30,27 @@ export async function getCatalog(): Promise<Catalog> {
   if (cached) return cached;
   if (inflight) return inflight;
 
-  inflight = Promise.all([
-    listSeverities(false),
+  const request = Promise.all([
+    listSeverities(true),
     listClassifications(false),
   ]).then(([s, c]) => {
-    cached = build(s, c);
-    inflight = null;
-    return cached;
+    const result = build(s, c);
+    if (inflight === request) {
+      cached = result;
+      inflight = null;
+    }
+    return result;
   }).catch((e) => {
-    inflight = null;
+    if (inflight === request) inflight = null;
     throw e;
   });
 
-  return inflight;
+  inflight = request;
+  return request;
 }
 
 export function clearCatalogCache() {
   cached = null;
+  inflight = null;
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(CATALOG_CHANGED_EVENT));
 }

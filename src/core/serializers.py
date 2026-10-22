@@ -919,7 +919,7 @@ class AttachmentSerializer(serializers.ModelSerializer):
 class SeveritySerializer(serializers.ModelSerializer):
     class Meta:
         model = Severity
-        fields = ["id", "code", "label", "order", "is_active"]
+        fields = ["id", "code", "label", "order", "is_active", "color"]
 
 
 class ClassificationSerializer(serializers.ModelSerializer):

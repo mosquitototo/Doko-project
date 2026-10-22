@@ -675,6 +675,7 @@ class DokoSecurityAndFunctionTests(APITestCase):
         )
         payload = build_audit_log_hec_payload(audit_log, splunk)
         response = Mock(status_code=200)
+        response.json.return_value = {"code": 0, "text": "Success"}
         post.return_value = response
 
         send_payload_to_splunk_hec(splunk, payload)
@@ -684,6 +685,7 @@ class DokoSecurityAndFunctionTests(APITestCase):
             headers={"Authorization": "Splunk hec-secret", "Content-Type": "application/json"},
             json=payload,
             timeout=10,
+            verify=True,
             proxies={
                 "http": "http://proxy-user:proxy-secret@proxy.example.test:8080",
                 "https": "http://proxy-user:proxy-secret@proxy.example.test:8080",
@@ -1622,6 +1624,7 @@ class DokoSecurityAndFunctionTests(APITestCase):
     @patch("core.services_splunk_hec.requests.post")
     def test_splunk_hec_test_reports_success_and_hides_network_details(self, post):
         post.return_value = Mock(status_code=200)
+        post.return_value.json.return_value = {"code": 0, "text": "Success"}
         ok, detail = test_splunk_hec_connection(
             {"endpoint": "http://splunk.example.test:8088/services/collector", "token": "hec-secret"}
         )
@@ -1635,7 +1638,7 @@ class DokoSecurityAndFunctionTests(APITestCase):
             {"endpoint": "http://splunk.example.test:8088/services/collector", "token": "hec-secret"}
         )
         self.assertFalse(ok)
-        self.assertEqual(detail, "Unable to reach Splunk HEC.")
+        self.assertIn("outbound proxy", detail)
         self.assertNotIn("proxy-secret", detail)
 
     def test_role_permission_update_rejects_unknown_ids(self):

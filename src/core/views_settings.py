@@ -59,6 +59,7 @@ from .rbac import user_has_perm, is_doko_admin, is_privileged_account, INSTANCE_
 from .audit import audit_event
 from .instance_backups import create_database_backup, restore_database_backup
 from .services_splunk_hec import test_splunk_hec_connection
+from .crypto_secrets import SecretEncryptionError
 from .services_syslog import test_syslog_connection
 from .serializers_settings import (
     RoleSerializer,
@@ -1797,7 +1798,13 @@ class InstanceSplunkHecTestView(APIView):
             payload["endpoint"] = obj.endpoint or ""
 
         if not payload["token"]:
-            payload["token"] = obj.get_token()
+            try:
+                payload["token"] = obj.get_token()
+            except SecretEncryptionError:
+                return Response(
+                    {"ok": False, "detail": "Unable to decrypt the Splunk HEC token. Check the secret encryption configuration on web and workers."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         if not payload["index"]:
             payload["index"] = obj.index or ""

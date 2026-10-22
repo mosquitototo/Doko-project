@@ -7,6 +7,7 @@ export type SeverityItem = {
   label: string;
   order: number;
   is_active: boolean;
+  color?: string;
 };
 
 export type ClassificationItem = {
@@ -16,14 +17,25 @@ export type ClassificationItem = {
   is_active: boolean;
 };
 
-export async function listSeverities(includeInactive = false): Promise<SeverityItem[]> {
-  const res = await api.get("/api/settings/data-models/severities/", {
-    params: includeInactive ? { include_inactive: "1" } : {},
-  });
-  return Array.isArray(res.data) ? res.data : res.data.results ?? [];
+async function listAllDataModels<T>(path: string, includeInactive: boolean): Promise<T[]> {
+  const items: T[] = [];
+  let page = 1;
+  while (true) {
+    const { data } = await api.get(path, {
+      params: { page, ...(includeInactive ? { include_inactive: "1" } : {}) },
+    });
+    if (Array.isArray(data)) return [...items, ...data];
+    items.push(...(data.results ?? []));
+    if (!data.next) return items;
+    page += 1;
+  }
 }
 
-export async function createSeverity(payload: { code: string; label: string; order: number }) {
+export function listSeverities(includeInactive = false): Promise<SeverityItem[]> {
+  return listAllDataModels("/api/settings/data-models/severities/", includeInactive);
+}
+
+export async function createSeverity(payload: { code: string; label: string; order: number; color?: string }) {
   const csrfToken = await ensureCsrf();
   const res = await api.post("/api/settings/data-models/severities/", payload, {
     headers: {
@@ -35,7 +47,7 @@ export async function createSeverity(payload: { code: string; label: string; ord
 
 export async function updateSeverity(
   id: number,
-  payload: Partial<{ code: string; label: string; order: number; is_active: boolean }>
+  payload: Partial<{ code: string; label: string; order: number; is_active: boolean; color: string }>
 ) {
   const csrfToken = await ensureCsrf();
   const res = await api.patch(`/api/settings/data-models/severities/${id}/`, payload, {
@@ -55,11 +67,8 @@ export async function disableSeverity(id: number) {
   });
 }
 
-export async function listClassifications(includeInactive = false): Promise<ClassificationItem[]> {
-  const res = await api.get("/api/settings/data-models/classifications/", {
-    params: includeInactive ? { include_inactive: "1" } : {},
-  });
-  return Array.isArray(res.data) ? res.data : res.data.results ?? [];
+export function listClassifications(includeInactive = false): Promise<ClassificationItem[]> {
+  return listAllDataModels("/api/settings/data-models/classifications/", includeInactive);
 }
 
 export async function createClassification(payload: { code: string; label: string }) {

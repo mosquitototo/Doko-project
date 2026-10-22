@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Card from "../../components/ui/Card";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useToast } from "../../components/ui/toast";
@@ -15,6 +15,8 @@ import {
   type ClassificationItem,
 } from "../../api/dataModels";
 import { useMe } from "../../contexts/MeContext";
+import { clearCatalogCache } from "../../data/catalog";
+import { legacySeverityColor, severityColorClass, severityColors } from "../../components/ui/severityColors";
 import {
   NewGenButton,
   DeleteButton,
@@ -23,6 +25,57 @@ import {
 } from "../../components/ui/IconButton";
 
 type Tab = "severities" | "classifications";
+
+function fieldError(error: any): string {
+  const data = error?.response?.data;
+  const fields = ["code", "label", "order", "color"]
+    .filter(field => data?.[field])
+    .map(field => `${field}: ${Array.isArray(data[field]) ? data[field].join(" ") : data[field]}`);
+  return fields.join(" · ") || String(data?.detail ?? error?.response?.status ?? "network");
+}
+
+function lengthError(code: string, label: string, limit: number): string {
+  return ["Code", "Label"].filter((_, i) => Array.from([code, label][i]).length > limit)
+    .map(field => `${field}: ${limit} characters maximum.`).join(" ");
+}
+
+function SeverityColorPicker({ value, onChange }: { value: string; onChange: (color: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.stopPropagation(); setOpen(false); }
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [open]);
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-muted-foreground">Badge color :</span>
+      <div ref={root} className="relative w-fit">
+        <button type="button" aria-label="Select severity color" aria-expanded={open} title={`Color: ${value}`}
+          onClick={() => setOpen(!open)} className={`block h-5 w-10 rounded-full border ${severityColorClass(value)}`} />
+        {open ? (
+          <div className="absolute bottom-full left-0 z-50 mb-2 grid w-max grid-cols-3 gap-2 rounded-xl border border-border bg-popover p-3 shadow-lg" role="group" aria-label="Severity colors">
+            {Object.keys(severityColors).map(color => (
+              <button key={color} type="button" aria-label={color} aria-pressed={color === value} title={color}
+                onClick={() => { onChange(color); setOpen(false); }}
+                className={`h-5 w-10 rounded-full border ${severityColorClass(color)} ${color === value ? "ring-1 ring-ring ring-offset-2 ring-offset-background" : ""}`} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
 
 function FieldLabel({
   children,
@@ -51,38 +104,6 @@ function SettingInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
         props.className || "",
       ].join(" ")}
     />
-  );
-}
-
-function SettingCheckbox({
-  checked,
-  onChange,
-  disabled,
-  label,
-  hint,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  label: string;
-  hint?: string;
-}) {
-  return (
-    <label className="flex items-center gap-3 rounded-2xl border border-border bg-background px-4 py-3">
-      <input
-        type="checkbox"
-        className="h-4 w-4 cursor-pointer rounded border-border"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
-      />
-      <div>
-        <div className="text-sm font-medium text-foreground">{label}</div>
-        {hint ? (
-          <div className="text-xs text-muted-foreground">{hint}</div>
-        ) : null}
-      </div>
-    </label>
   );
 }
 
@@ -136,7 +157,6 @@ export default function DataModels() {
   const canManage = can("settings.data_models.manage");
 
   const [tab, setTab] = useState<Tab>("severities");
-  const [includeInactive, setIncludeInactive] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const [severities, setSeverities] = useState<SeverityItem[]>([]);
@@ -148,6 +168,7 @@ export default function DataModels() {
   const [createCode, setCreateCode] = useState("");
   const [createLabel, setCreateLabel] = useState("");
   const [createOrder, setCreateOrder] = useState(0);
+  const [createColor, setCreateColor] = useState("gray");
 
   const [editSev, setEditSev] = useState<SeverityItem | null>(null);
   const [editCls, setEditCls] = useState<ClassificationItem | null>(null);
@@ -169,8 +190,8 @@ export default function DataModels() {
     setLoading(true);
     try {
       const [s, c] = await Promise.all([
-        listSeverities(includeInactive),
-        listClassifications(includeInactive),
+        listSeverities(),
+        listClassifications(),
       ]);
       setSeverities(s);
       setClassifications(c);
@@ -188,7 +209,7 @@ export default function DataModels() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [includeInactive, canView]);
+  }, [canView]);
 
   const visibleSev = useMemo(
     () =>
@@ -236,6 +257,7 @@ export default function DataModels() {
               setCreateCode("");
               setCreateLabel("");
               setCreateOrder(0);
+              setCreateColor("gray");
             }}
             disabled={loading || !canManage}
             iconOnly={false}
@@ -264,15 +286,6 @@ export default function DataModels() {
             </div>
           </div>
 
-          <div className="min-w-0">
-            <SettingCheckbox
-              checked={includeInactive}
-              onChange={setIncludeInactive}
-              disabled={loading}
-              label="Include inactive"
-              hint="Show disabled values in the list."
-            />
-          </div>
         </div>
       </Card>
 
@@ -299,10 +312,11 @@ export default function DataModels() {
               <div className="min-w-[820px]">
                 <div className="grid grid-cols-12 gap-3 border-b border-border bg-background/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                   <div className="col-span-3">Code</div>
-                  <div className="col-span-5">Label</div>
+                  <div className={tab === "severities" ? "col-span-4" : "col-span-5"}>Label</div>
                   {tab === "severities" ? (
                     <div className="col-span-1">Order</div>
                   ) : null}
+                  {tab === "severities" ? <div className="col-span-1">Color</div> : null}
                   <div className={tab === "severities" ? "col-span-1" : "col-span-2"}>
                     Status
                   </div>
@@ -326,7 +340,7 @@ export default function DataModels() {
                         </div>
                       </div>
 
-                      <div className="col-span-5 min-w-0">
+                      <div className={tab === "severities" ? "col-span-4 min-w-0" : "col-span-5 min-w-0"}>
                         <div
                           className="truncate text-sm font-medium text-foreground"
                           title={x.label}
@@ -338,6 +352,12 @@ export default function DataModels() {
                       {tab === "severities" ? (
                         <div className="col-span-1 text-sm text-muted-foreground">
                           {x.order}
+                        </div>
+                      ) : null}
+                      {tab === "severities" ? (
+                        <div className="col-span-1">
+                          <span title={x.color ?? legacySeverityColor(x.code)} aria-label={`Color: ${x.color ?? legacySeverityColor(x.code)}`}
+                            className={`block h-5 w-10 rounded-full border ${severityColorClass(x.color ?? legacySeverityColor(x.code))}`} />
                         </div>
                       ) : null}
 
@@ -418,6 +438,8 @@ export default function DataModels() {
           if (!canManage || loading) return;
           const code = createCode.trim();
           const label = createLabel.trim();
+          const invalidLength = lengthError(code, label, tab === "severities" ? 50 : 120);
+          if (invalidLength) { push({ kind: "error", title: "Invalid length", message: invalidLength }); return; }
           if (!code || !label) {
             push({
               kind: "error",
@@ -433,20 +455,20 @@ export default function DataModels() {
                 code,
                 label,
                 order: Number(createOrder) || 0,
+                color: createColor,
               });
             } else {
               await createClassification({ code, label });
             }
             push({ kind: "success", title: "Created" });
             setCreateOpen(false);
+            clearCatalogCache();
             await load();
           } catch (e: any) {
             push({
               kind: "error",
               title: "Error",
-              message: String(
-                e?.response?.data?.detail ?? e?.response?.status ?? "network"
-              ),
+              message: fieldError(e),
             });
           } finally {
             setLoading(false);
@@ -483,6 +505,8 @@ export default function DataModels() {
                 />
               </label>
             ) : null}
+            {tab === "severities" ? <SeverityColorPicker value={createColor} onChange={setCreateColor} /> : null}
+            <p className="text-xs italic text-muted-foreground">Code and label: {tab === "severities" ? 50 : 120} characters max.</p>
           </div>
         }
       />
@@ -495,9 +519,10 @@ export default function DataModels() {
         onCancel={() => setEditSev(null)}
         onConfirm={async () => {
           if (!editSev || !canManage || loading) return;
-          setLoading(true);
           const code = editSev.code.trim();
           const label = editSev.label.trim();
+          const invalidLength = lengthError(code, label, 50);
+          if (invalidLength) { push({ kind: "error", title: "Invalid length", message: invalidLength }); return; }
 
           if (!code || !label) {
             push({
@@ -514,17 +539,17 @@ export default function DataModels() {
               code,
               label,
               order: Number(editSev.order) || 0,
+              color: editSev.color ?? legacySeverityColor(editSev.code),
             });
             push({ kind: "success", title: "Updated" });
             setEditSev(null);
+            clearCatalogCache();
             await load();
           } catch (e: any) {
             push({
               kind: "error",
               title: "Error",
-              message: String(
-                e?.response?.data?.detail ?? e?.response?.status ?? "network"
-              ),
+              message: fieldError(e),
             });
           } finally {
             setLoading(false);
@@ -563,6 +588,8 @@ export default function DataModels() {
                   }
                 />
               </label>
+              <SeverityColorPicker value={editSev.color ?? legacySeverityColor(editSev.code)} onChange={color => setEditSev({ ...editSev, color })} />
+              <p className="text-xs italic text-muted-foreground">Code and label: 50 characters max.</p>
             </div>
           ) : null
         }
@@ -578,6 +605,8 @@ export default function DataModels() {
           if (!editCls || !canManage || loading) return;
           const code = editCls.code.trim();
           const label = editCls.label.trim();
+          const invalidLength = lengthError(code, label, 120);
+          if (invalidLength) { push({ kind: "error", title: "Invalid length", message: invalidLength }); return; }
 
           if (!code || !label) {
             push({
@@ -596,14 +625,13 @@ export default function DataModels() {
             });
             push({ kind: "success", title: "Updated" });
             setEditCls(null);
+            clearCatalogCache();
             await load();
           } catch (e: any) {
             push({
               kind: "error",
               title: "Error",
-              message: String(
-                e?.response?.data?.detail ?? e?.response?.status ?? "network"
-              ),
+              message: fieldError(e),
             });
           } finally {
             setLoading(false);
@@ -631,6 +659,7 @@ export default function DataModels() {
                   }
                 />
               </label>
+              <p className="text-xs italic text-muted-foreground">Code and label: 120 characters max.</p>
             </div>
           ) : null
         }
@@ -652,6 +681,7 @@ export default function DataModels() {
             }
             push({ kind: "success", title: "Disabled" });
             setDisableTarget(null);
+            clearCatalogCache();
             await load();
           } catch (e: any) {
             push({
@@ -689,6 +719,7 @@ export default function DataModels() {
 
             push({ kind: "success", title: "Enabled" });
             setEnableTarget(null);
+            clearCatalogCache();
             await load();
           } catch (e: any) {
             push({

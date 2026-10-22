@@ -42,7 +42,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **kwargs):
         for code, label, order in SEVERITIES:
-            Severity.objects.update_or_create(code=code, defaults={"label": label, "order": order})
+            defaults = {"label": label, "order": order}
+            color = {"low": "cyan", "medium": "amber", "high": "orange", "critical": "red"}[code]
+            Severity.objects.update_or_create(code=code, defaults=defaults, create_defaults={**defaults, "color": color})
 
         for code, label in CLASSIFICATIONS:
             Classification.objects.update_or_create(code=code, defaults={"label": label})

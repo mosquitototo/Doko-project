@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { clearCatalogCache, getCatalog } from "./catalog";
+import { CATALOG_CHANGED_EVENT, clearCatalogCache, getCatalog } from "./catalog";
 
 export function useCatalog() {
   const [loading, setLoading] = useState(true);
@@ -23,21 +23,28 @@ export function useCatalog() {
 
   useEffect(() => {
     let mounted = true;
+    let generation = 0;
 
-    setLoading(true);
-    getCatalog()
-      .then((c) => {
-        if (mounted) setCatalog(c);
-      })
-      .catch(() => {
-        if (mounted) setCatalog(null);
-      })
-      .finally(() => {
-        if (mounted) setLoading(false);
-      });
+    const load = () => {
+      const current = ++generation;
+      setLoading(true);
+      getCatalog()
+        .then((c) => {
+          if (mounted && current === generation) setCatalog(c);
+        })
+        .catch(() => {
+          if (mounted && current === generation) setCatalog(null);
+        })
+        .finally(() => {
+          if (mounted && current === generation) setLoading(false);
+        });
+    };
+    load();
+    window.addEventListener(CATALOG_CHANGED_EVENT, load);
 
     return () => {
       mounted = false;
+      window.removeEventListener(CATALOG_CHANGED_EVENT, load);
     };
   }, []);
 
