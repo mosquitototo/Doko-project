@@ -14,6 +14,22 @@ export function severityColorClass(color?: string) {
   return severityColors[color as keyof typeof severityColors] ?? severityColors.gray;
 }
 
+const severityChartColors: Record<keyof typeof severityColors, string> = {
+  gray: "#6b7280",
+  cyan: "#06b6d4",
+  blue: "#3b82f6",
+  violet: "#8b5cf6",
+  pink: "#ec4899",
+  emerald: "#10b981",
+  amber: "#f59e0b",
+  orange: "#f97316",
+  red: "#ef4444",
+};
+
+export function severityChartColor(color?: string) {
+  return severityChartColors[color as keyof typeof severityColors] ?? severityChartColors.gray;
+}
+
 export function legacySeverityColor(code: string) {
   return ({ low: "cyan", medium: "amber", high: "orange", critical: "red" } as Record<string, string>)[code.toLowerCase()] ?? "gray";
 }

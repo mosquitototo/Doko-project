@@ -12,7 +12,7 @@ const contentClassName = [
 export default function ChatMessageContent({ html }: ChatMessageContentProps) {
   return (
     <div className={contentClassName}>
-      <MarkdownRenderedContent markdown={html} />
+      <MarkdownRenderedContent markdown={html} linksAsText />
     </div>
   );
 }

@@ -1,3 +1,5 @@
+import { clearListFilters } from "../utils/listViewSession";
+
 const SESSION_FLAG_KEY = "doko_session_present";
 const LEGACY_TOKEN_KEY = "token";
 
@@ -14,11 +16,13 @@ export function getToken() {
 }
 
 export function setToken(_token: string) {
+  clearListFilters();
   localStorage.setItem(SESSION_FLAG_KEY, "1");
   localStorage.removeItem(LEGACY_TOKEN_KEY);
 }
 
 export function clearToken() {
+  clearListFilters();
   localStorage.removeItem(SESSION_FLAG_KEY);
   localStorage.removeItem(LEGACY_TOKEN_KEY);
 }

@@ -44,6 +44,7 @@ import MultiSelectCombobox, {
 } from "../components/ui/MultiSelectCombobox";
 import SelectField from "../components/ui/SelectField";
 import { pageAfterDeletion } from "../utils/pagination";
+import { readListFilters, saveListFilters } from "../utils/listViewSession";
 
 function formatDate(iso: string) {
   try {
@@ -217,6 +218,8 @@ function HeaderSortLabel({
 
 
 export default function Tickets() {
+  const me = useMe();
+  const [initialFilters] = useState(() => readListFilters("cases", me?.id));
   const [items, setItems] = useState<CaseListItem[]>([]);
   const [previewCase, setPreviewCase] = useState<CaseListItem | null>(null);
   const [serverCount, setServerCount] = useState(0);
@@ -226,22 +229,22 @@ export default function Tickets() {
     [items]
   );
 
-  const [status, setStatus] = useState<string[]>(["open", "in_progress"]);
-  const [owner, setOwner] = useState<string[]>([]);
-  const [classification, setClassification] = useState<string[]>([]);
-  const [severity, setSeverity] = useState<string[]>([]);
-  const [customer, setCustomer] = useState<string[]>([]);
-  const [outcome, setOutcome] = useState<string[]>([]);
+  const [status, setStatus] = useState<string[]>(initialFilters.status ?? ["open", "in_progress"]);
+  const [owner, setOwner] = useState<string[]>(initialFilters.owner ?? []);
+  const [classification, setClassification] = useState<string[]>(initialFilters.classification ?? []);
+  const [severity, setSeverity] = useState<string[]>(initialFilters.severity ?? []);
+  const [customer, setCustomer] = useState<string[]>(initialFilters.customer ?? []);
+  const [outcome, setOutcome] = useState<string[]>(initialFilters.outcome ?? []);
 
   const [page, setPage] = useState(1);
-  const [search, setSearch] = useState("");
-  const [createdFrom, setCreatedFrom] = useState("");
-  const [createdTo, setCreatedTo] = useState("");
+  const [search, setSearch] = useState(initialFilters.searchInput?.trim() ?? "");
+  const [createdFrom, setCreatedFrom] = useState(initialFilters.createdFrom ?? "");
+  const [createdTo, setCreatedTo] = useState(initialFilters.createdTo ?? "");
   const validCreatedRange = !!createdFrom && !!createdTo && createdFrom <= createdTo;
-  const [ordering, setOrdering] = useState("-created_at");
+  const [ordering, setOrdering] = useState(initialFilters.ordering ?? "-created_at");
 
-  const [includeArchived, setIncludeArchived] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [includeArchived, setIncludeArchived] = useState(initialFilters.includeArchived ?? false);
+  const [filtersOpen, setFiltersOpen] = useState(initialFilters.filtersOpen ?? false);
 
   const navigate = useNavigate();
 
@@ -250,7 +253,10 @@ export default function Tickets() {
 
   const { push } = useToast();
 
-  const [searchInput, setSearchInput] = useState("");
+  const [searchInput, setSearchInput] = useState(initialFilters.searchInput ?? "");
+  useEffect(() => {
+    saveListFilters("cases", me?.id, { customer, status, owner, severity, classification, outcome, ordering, searchInput, createdFrom, createdTo, filtersOpen, includeArchived });
+  }, [me?.id, customer, status, owner, severity, classification, outcome, ordering, searchInput, createdFrom, createdTo, filtersOpen, includeArchived]);
   useEffect(() => {
     const t = setTimeout(() => {
       setPage(1);
@@ -280,7 +286,6 @@ export default function Tickets() {
   const [busyDeleteId, setBusyDeleteId] = useState<string | null>(null);
   const [busyBulkAction, setBusyBulkAction] = useState(false);
 
-  const me = useMe();
   const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canDeleteCase = can("case.delete");
   const canAddCase = can("case.add");
@@ -651,6 +656,7 @@ export default function Tickets() {
   }
 
   const clearFilters = () => {
+    setIncludeArchived(false);
     setCreatedFrom("");
     setCreatedTo("");
     setPage(1);
@@ -1128,7 +1134,7 @@ export default function Tickets() {
         title={previewCase?.title || "Case description"}
         size="xl"
         headerActions={previewCase ? <Link to={`/cases/${previewCase.id}`} aria-label="Open case" title="Open case" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"><ArrowUpRight className="h-4 w-4" /></Link> : null}
-        message={<div className="min-h-[50vh]">{previewCase?.description ? <MarkdownRenderedContent markdown={previewCase.description} /> : <span className="text-muted-foreground">No description</span>}</div>}
+        message={<div className="min-h-[50vh]">{previewCase?.description ? <MarkdownRenderedContent markdown={previewCase.description} requireLinkModifier /> : <span className="text-muted-foreground">No description</span>}</div>}
         confirmButton={<></>}
         onConfirm={() => {}}
         onCancel={() => setPreviewCase(null)}

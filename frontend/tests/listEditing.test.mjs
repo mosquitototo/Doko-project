@@ -46,11 +46,12 @@ for (const page of ["Alerts", "Cases"]) {
   test(`${page} clear filters clears creation dates and resets pagination`, () => {
     const values = {};
     const context = {};
-    for (const key of ["CreatedFrom", "CreatedTo", "Page", "Status", "Owner", "Severity", "Classification", "Customer", "Outcome", "SearchInput", "Search"]) context[`set${key}`] = value => { values[key] = value; };
+    for (const key of ["CreatedFrom", "CreatedTo", "Page", "Status", "Owner", "Severity", "Classification", "Customer", "Outcome", "SearchInput", "Search", "IncludeArchived"]) context[`set${key}`] = value => { values[key] = value; };
     runInNewContext(`(${clearSource})();`, context);
     assert.equal(values.CreatedFrom, "");
     assert.equal(values.CreatedTo, "");
     assert.equal(values.Page, 1);
+    if (page === "Cases") assert.equal(values.IncludeArchived, false);
   });
   for (const mixed of [false, true]) {
     test(`${page} edit prefills shared values and leaves differing fields unchanged (${mixed})`, () => {

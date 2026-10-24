@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "vite";
 
+test("severity chart colors cover the badge palette with a gray fallback", async () => {
+  const colors = await import("../src/components/ui/severityColors.ts");
+  assert.equal(typeof colors.severityChartColor, "function");
+  assert.equal(colors.severityChartColor("violet"), "#8b5cf6");
+  assert.equal(colors.severityChartColor("emerald"), "#10b981");
+  for (const color of Object.keys(colors.severityColors)) {
+    assert.match(colors.severityChartColor(color), /^#[0-9a-f]{6}$/);
+  }
+  assert.equal(colors.severityChartColor("invalid"), colors.severityChartColor("gray"));
+});
+
 test("data model lists load every page and retain include-inactive filtering", async () => {
   const server = await createServer({ server: { middlewareMode: true }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   try {

@@ -51,6 +51,7 @@ import MultiSelectCombobox, {
 } from "../components/ui/MultiSelectCombobox";
 import SelectField from "../components/ui/SelectField";
 import { pageAfterDeletion } from "../utils/pagination";
+import { readListFilters, saveListFilters } from "../utils/listViewSession";
 
 function formatDate(iso: string) {
   try {
@@ -224,6 +225,7 @@ function SlaBadge({ state }: { state?: string | null }) {
 
 export default function Alerts() {
   const me = useMe();
+  const [initialFilters] = useState(() => readListFilters("alerts", me?.id));
   const can = (p: string) => !!me?.is_admin || !!me?.permissions?.includes(p);
   const canMerge = can("alert.merge") || can("alert.escalate");
   const canUpdate = can("alert.update");
@@ -238,26 +240,30 @@ export default function Alerts() {
   const pageSizeOptions = [10, 20, 50, 100];
   const [pageSize, setPageSize] = useState(20);
 
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [createdFrom, setCreatedFrom] = useState("");
-  const [createdTo, setCreatedTo] = useState("");
+  const [searchInput, setSearchInput] = useState(initialFilters.searchInput ?? "");
+  const [search, setSearch] = useState(initialFilters.searchInput?.trim() ?? "");
+  const [createdFrom, setCreatedFrom] = useState(initialFilters.createdFrom ?? "");
+  const [createdTo, setCreatedTo] = useState(initialFilters.createdTo ?? "");
   const validCreatedRange = !!createdFrom && !!createdTo && createdFrom <= createdTo;
 
-  const [customer, setCustomer] = useState<string[]>([]);
-  const [status, setStatus] = useState<string[]>(["open","in_progress"]);
-  const [owner, setOwner] = useState<string[]>([]);
-  const [severity, setSeverity] = useState<string[]>([]);
-  const [classification, setClassification] = useState<string[]>([]);
-  const [outcome, setOutcome] = useState<string[]>([]);
-  const [ordering, setOrdering] = useState("-created_at");
+  const [customer, setCustomer] = useState<string[]>(initialFilters.customer ?? []);
+  const [status, setStatus] = useState<string[]>(initialFilters.status ?? ["open","in_progress"]);
+  const [owner, setOwner] = useState<string[]>(initialFilters.owner ?? []);
+  const [severity, setSeverity] = useState<string[]>(initialFilters.severity ?? []);
+  const [classification, setClassification] = useState<string[]>(initialFilters.classification ?? []);
+  const [outcome, setOutcome] = useState<string[]>(initialFilters.outcome ?? []);
+  const [ordering, setOrdering] = useState(initialFilters.ordering ?? "-created_at");
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newAlertCount, setNewAlertCount] = useState(0);
   const newAlertBaselineRef = useRef<{ scopeKey: string; createdAfter: string } | null>(null);
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(initialFilters.filtersOpen ?? false);
+
+  useEffect(() => {
+    saveListFilters("alerts", me?.id, { customer, status, owner, severity, classification, outcome, ordering, searchInput, createdFrom, createdTo, filtersOpen });
+  }, [me?.id, customer, status, owner, severity, classification, outcome, ordering, searchInput, createdFrom, createdTo, filtersOpen]);
 
   const navigate = useNavigate();
   const { push } = useToast();
@@ -1212,7 +1218,7 @@ export default function Alerts() {
           </div>
         ) : null}
 
-        {loading ? (
+        {loading && itemsArr.length === 0 ? (
           <div className="space-y-3 p-5">
             {Array.from({ length: 6 }).map((_, i) => (
               <div
@@ -1787,7 +1793,7 @@ export default function Alerts() {
         title={previewAlert?.title || "Alert description"}
         headerActions={previewAlert ? <Link to={`/alerts/${previewAlert.id}`} aria-label="Open alert" title="Open alert" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"><ArrowUpRight className="h-4 w-4" /></Link> : null}
         size="xl"
-        message={<div className="min-h-[50vh]">{previewAlert?.description ? <MarkdownRenderedContent markdown={previewAlert.description} /> : <span className="text-muted-foreground">No description</span>}</div>}
+        message={<div className="min-h-[50vh]">{previewAlert?.description ? <MarkdownRenderedContent markdown={previewAlert.description} requireLinkModifier /> : <span className="text-muted-foreground">No description</span>}</div>}
         confirmButton={<></>}
         onConfirm={() => {}}
         onCancel={() => setPreviewAlert(null)}

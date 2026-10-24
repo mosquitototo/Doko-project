@@ -65,6 +65,61 @@ class DokoSecurityAndFunctionTests(APITestCase):
     def authenticate(self, user):
         self.client.force_authenticate(user=user)
 
+    def test_owned_task_comments_follow_task_edit_permissions(self):
+        from core.models import TaskComment
+        self.grant(self.user_a, self.customer_a, "task.view", "task.add")
+        self.authenticate(self.user_a)
+        own = Task.objects.create(title="Own", owner=self.user_a)
+        own.customers.add(self.customer_a)
+        response = self.client.post(f"/api/tasks/{own.id}/comments/", {"text": "Own note"})
+        self.assertEqual(response.status_code, 201)
+        cid = response.data["id"]
+        self.assertIn("author_avatar_url", response.data)
+        self.assertEqual(self.client.patch(f"/api/task-comments/{cid}/", {"text": "Changed"}).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/task-comments/{cid}/").status_code, 204)
+        self.assertFalse(TaskComment.objects.filter(pk=cid).exists())
+        for owner, customers in ((self.user_b, [self.customer_a]), (self.user_a, [self.customer_b]), (self.user_a, [self.customer_a, self.customer_b])):
+            task = Task.objects.create(title="Denied", owner=owner)
+            task.customers.set(customers)
+            task.members.add(self.user_a)
+            comment = TaskComment.objects.create(task=task, author=self.user_b, text="Keep")
+            self.assertEqual(self.client.post(f"/api/tasks/{task.id}/comments/", {"text": "Denied"}).status_code, 403, f"owner={owner.username}, customers={[c.name for c in customers]}")
+            self.assertEqual(self.client.patch(f"/api/task-comments/{comment.id}/", {"text": "Denied"}).status_code, 403)
+            self.assertEqual(self.client.delete(f"/api/task-comments/{comment.id}/").status_code, 403)
+            comment.refresh_from_db()
+            self.assertEqual(comment.text, "Keep")
+
+    def test_manage_all_task_comments_stays_scoped_and_view_is_read_only(self):
+        from core.models import TaskComment
+        self.grant(self.user_a, self.customer_a, "task.view", "task.manage")
+        self.grant(self.user_b, self.customer_a, "task.view")
+        task = Task.objects.create(title="Other owner", owner=self.user_b)
+        task.customers.add(self.customer_a)
+        comment = TaskComment.objects.create(task=task, author=self.user_b, text="Keep")
+        self.authenticate(self.user_b)
+        self.assertEqual(self.client.post(f"/api/tasks/{task.id}/comments/", {"text": "Denied"}).status_code, 403)
+        self.assertEqual(self.client.patch(f"/api/task-comments/{comment.id}/", {"text": "Denied"}).status_code, 403)
+        self.authenticate(self.user_a)
+        self.assertEqual(self.client.post(f"/api/tasks/{task.id}/comments/", {"text": "Allowed"}).status_code, 201)
+        self.assertEqual(self.client.patch(f"/api/task-comments/{comment.id}/", {"text": "Allowed"}).status_code, 200)
+        task.customers.set([self.customer_b])
+        self.assertEqual(self.client.delete(f"/api/task-comments/{comment.id}/").status_code, 403)
+
+    def test_task_comment_avatar_and_permission_label(self):
+        from django.core.management import call_command
+        from core.models import TaskComment
+        from core.serializers import TaskCommentSerializer
+        self.user_a.profile.avatar = "avatars/author.png"
+        self.user_a.profile.save()
+        task = Task.objects.create(title="Avatar", owner=self.user_a)
+        comment = TaskComment.objects.create(task=task, author=self.user_a, text="Note")
+        self.assertEqual(TaskCommentSerializer(comment).data.get("author_avatar_url"), "/media/avatars/author.png")
+        permission, _ = Permission.objects.get_or_create(code="task.add", defaults={"label": "Add tasks"})
+        call_command("seed_permissions", verbosity=0)
+        permission.refresh_from_db()
+        self.assertEqual(permission.label, "Manage own tasks")
+        self.assertEqual(Permission.objects.get(code="task.manage").label, "Manage all tasks")
+
     def test_created_date_range_includes_whole_days_and_preserves_customer_scope(self):
         self.grant(self.user_a, self.customer_a, "alert.view", "case.view")
         self.authenticate(self.user_a)

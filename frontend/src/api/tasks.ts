@@ -31,6 +31,7 @@ export type TaskComment = {
   updated_at: string;
   author_label?: string;
   author_display?: string;
+  author_avatar_url?: string | null;
 };
 
 export type TaskLinkedCase = {

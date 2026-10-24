@@ -10,6 +10,7 @@ import { listCustomers, type Customer } from "../api/settingsCustomers";
 import KeyValueEditor from "../components/ui/KeyValueEditor";
 import MarkdownEditor from "../components/ui/MarkdownEditor";
 import MarkdownRenderedContent from "../components/ui/MarkdownRenderedContent";
+import type { MarkdownLinkAction } from "../components/ui/markdownLinks";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import {
   fetchHuntDetail,
@@ -329,6 +330,7 @@ export default function HuntDetailPage() {
   const [editConclusion, setEditConclusion] = useState("");
   const [journalBusyId, setJournalBusyId] = useState<string | null>(null);
   const [editingJournalEntryId, setEditingJournalEntryId] = useState<string | null>(null);
+  const [journalLinkAction, setJournalLinkAction] = useState<MarkdownLinkAction | undefined>(undefined);
   const [editingJournalText, setEditingJournalText] = useState("");
   const [editingJournalType, setEditingJournalType] = useState("note");
 
@@ -604,6 +606,7 @@ export default function HuntDetailPage() {
   }
 
   function startEditJournalEntry(entry: HuntJournalEntry) {
+    setJournalLinkAction(undefined);
     setEditingJournalEntryId(entry.id);
     setEditingJournalText(String(entry.text || ""));
     setEditingJournalType(String(entry.entry_type || "note"));
@@ -835,7 +838,7 @@ export default function HuntDetailPage() {
           </div>
         </div>
         <div className="shrink-0 text-right text-[10px] leading-4 italic text-muted-foreground">
-          <div>Hunt ID {hunt.id}</div>
+          <div>Hunt UUID: {hunt.id}</div>
           <div>Last update {formatDate(hunt.updated_at)}</div>
         </div>
       </div>
@@ -1271,6 +1274,7 @@ export default function HuntDetailPage() {
                               <MarkdownEditor
                                 alwaysShowToolbar
                                 value={editingJournalText}
+                                initialLinkAction={journalLinkAction}
                                 onChange={(next) => setEditingJournalText(next)}
                                 disabled={busy || !canManageHunt || journalBusyId === entry.id}
                                 placeholder="Edit entry..."
@@ -1280,7 +1284,12 @@ export default function HuntDetailPage() {
                           ) : (
                             <div className="mt-3 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">
                               <MarkdownRenderedContent
+                                requireLinkModifier
                                 markdown={String(entry.text || "")}
+                                onEditLink={canManageHunt && !busy && journalBusyId !== entry.id ? request => {
+                                  startEditJournalEntry(entry);
+                                  setJournalLinkAction(request);
+                                } : undefined}
                                 className="min-w-0 max-w-full"
                               />
                             </div>

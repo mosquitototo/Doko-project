@@ -174,7 +174,7 @@ export default function CaseHeader(props: Props) {
           <span className="min-w-0 max-w-lg truncate" title={currentTitle}>{currentTitle}</span>
         </div>
         <div className="ml-auto max-w-full text-right leading-4">
-          <div className="break-all text-[10px] leading-4">Case ID: {props.caseItem.id}</div>
+          <div className="break-all text-[10px] leading-4">Case UUID: {props.caseItem.id}</div>
           <div className="text-[10px] italic leading-4">Last update {formatDate((props.caseItem as any).updated_at)}</div>
         </div>
       </nav>

@@ -131,13 +131,14 @@ test("unsupported images and reference syntax stay visible as literal text", () 
   }
 });
 
-test("styles the link preview for dark mode without changing read-only links", () => {
+test("shares the compact link preview theme between editing and consultation", () => {
+  const linkStyles = readFileSync(new URL("../src/components/ui/markdownLinks.css", import.meta.url), "utf8");
   assert.match(
-    markdownEditorSource,
+    linkStyles,
     /\[data-radix-popper-content-wrapper\] \[data-testid="link-dialog-preview"\][\s\S]*?color: hsl\(var\(--popover-foreground\)\) !important;/,
   );
   assert.match(
-    markdownEditorSource,
+    linkStyles,
     /\[data-radix-popper-content-wrapper\] \[class\*="_linkDialogPopoverContent"\] > \[class\*="_actionButton"\][\s\S]*?padding: 0\.125rem !important;/,
   );
   assert.doesNotMatch(

@@ -399,6 +399,7 @@ export default function Sidebar({
 
           {showSettings ? (
             <div className="space-y-2">
+              <div className="my-3 h-px bg-gradient-to-r from-transparent via-border to-transparent lg:my-4" />
               {sectionTitle("Settings")}
 
           {showUsers ? (

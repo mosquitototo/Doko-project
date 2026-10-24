@@ -25,6 +25,8 @@ import Card from "../components/ui/Card";
 import CustomerScopeBadge from "../components/ui/CustomerScopeBadge";
 import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
+import { legacySeverityColor, severityChartColor } from "../components/ui/severityColors";
+import { useCatalog } from "../data/useCatalog";
 import {
   fetchDashboard,
   fetchDashboardPreferences,
@@ -57,7 +59,7 @@ function fmtAxisLabel(value: string) {
   return value;
 }
 
-type Row = { key: string | null; label: string; value: number };
+type Row = { key: string | null; label: string; value: number; color?: string };
 type CasesDay = { date: string; created: number; closed: number };
 type AlertsDay = { date: string; created: number };
 
@@ -78,6 +80,16 @@ const PIE_COLORS = [
   "#6f9a3c",
   "#a85c7c",
   "#5a66a8",
+  "#c17d96",
+  "#469eae",
+  "#9b873e",
+  "#9978b8",
+  "#bc735f",
+  "#619e8c",
+  "#8a9dbb",
+  "#b89d65",
+  "#855d78",
+  "#78985c",
 ];
 
 const PERIOD_OPTIONS = [
@@ -126,7 +138,7 @@ function WidgetShell({
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDrop={() => onDrop(widgetId)}
-      className={`group relative transition ${
+      className={`group relative min-w-0 transition ${
         isDragging ? "opacity-40" : "opacity-100"
       }`}
     >
@@ -160,11 +172,9 @@ function WidgetShell({
 function ChartCardHeader({
   title,
   subtitle,
-  total,
 }: {
   title: string;
   subtitle?: string;
-  total?: string | number;
 }) {
   return (
     <div className="mb-4 flex items-start justify-between gap-3 pr-24">
@@ -175,11 +185,6 @@ function ChartCardHeader({
         ) : null}
       </div>
 
-      {total !== undefined ? (
-        <div className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground">
-          {total}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -205,13 +210,13 @@ function PieCard({
 
   return (
     <Card className="p-5">
-      <ChartCardHeader title={title} subtitle={subtitle} total={total} />
+      <ChartCardHeader title={title} subtitle={subtitle} />
 
       {data.length === 0 ? (
         <div className="py-8 text-sm text-muted-foreground">No data.</div>
       ) : (
-        <div className="grid items-center gap-5 xl:grid-cols-[minmax(0,220px)_1fr]">
-          <div className="h-[220px] w-full">
+        <div className="grid min-w-0 grid-cols-1 items-center gap-5 xl:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+          <div className="h-[220px] min-w-0 w-full">
             <ResponsiveContainer
               width="100%"
               height="100%"
@@ -228,13 +233,13 @@ function PieCard({
                   isAnimationActive={false}
                   stroke="none"
                 >
-                  {data.map((_, idx) => {
+                  {data.map((row, idx) => {
                     const isHovered = hoveredIndex === idx;
 
                     return (
                       <Cell
                         key={idx}
-                        fill={PIE_COLORS[idx % PIE_COLORS.length]}
+                        fill={row.color ?? PIE_COLORS[idx % PIE_COLORS.length]}
                         strokeWidth={isHovered ? 4 : 0}
                         style={{
                           filter: isHovered ? "brightness(1.08)" : "none",
@@ -279,12 +284,12 @@ function PieCard({
             </ResponsiveContainer>
           </div>
 
-          <div className="space-y-2.5">
+          <div className="min-w-0 space-y-2.5">
             {data
               .slice()
               .sort((a, b) => (b.value || 0) - (a.value || 0))
               .slice(0, 8)
-              .map((r, idx) => {
+              .map((r) => {
                 const pct = total > 0 ? Math.round((r.value / total) * 100) : 0;
                 return (
                   <div
@@ -295,7 +300,7 @@ function PieCard({
                       <span
                         className="h-2.5 w-2.5 shrink-0 rounded-full"
                         style={{
-                          backgroundColor: PIE_COLORS[idx % PIE_COLORS.length],
+                          backgroundColor: r.color ?? PIE_COLORS[data.indexOf(r) % PIE_COLORS.length],
                         }}
                       />
                       <div className="truncate text-sm text-foreground">
@@ -329,21 +334,12 @@ function FullWidthBarCases({
   subtitle: string;
 }) {
   const data = useMemo(() => (rows ?? []).slice(), [rows]);
-  const totalCreated = useMemo(
-    () => data.reduce((s, r) => s + (r.created || 0), 0),
-    [data]
-  );
-  const totalClosed = useMemo(
-    () => data.reduce((s, r) => s + (r.closed || 0), 0),
-    [data]
-  );
 
   return (
     <Card className="p-5">
       <ChartCardHeader
         title="Cases created vs closed"
         subtitle={subtitle}
-        total={`created ${totalCreated} • closed ${totalClosed}`}
       />
 
       {data.length === 0 ? (
@@ -417,17 +413,12 @@ function FullWidthBarAlerts({
   subtitle: string;
 }) {
   const data = useMemo(() => (rows ?? []).slice(), [rows]);
-  const total = useMemo(
-    () => data.reduce((s, r) => s + (r.created || 0), 0),
-    [data]
-  );
 
   return (
     <Card className="p-5">
       <ChartCardHeader
         title="Raised alerts"
         subtitle={subtitle}
-        total={total}
       />
 
       {data.length === 0 ? (
@@ -486,26 +477,6 @@ function FullWidthBarAlerts({
   );
 }
 
-function getSeverityMiniBarColor(label?: string | null) {
-  const value = String(label || "").trim().toLowerCase();
-
-  switch (value) {
-    case "critical":
-      return "#dc2626";
-    case "high":
-      return "#ea580c";
-    case "medium":
-      return "#d97706";
-    case "low":
-      return "#2563eb";
-    case "info":
-    case "informational":
-      return "#0891b2";
-    default:
-      return "rgba(59,130,246,0.75)";
-  }
-}
-
 function getSeverityOrder(label?: string | null) {
   const value = String(label || "").trim().toLowerCase();
 
@@ -541,7 +512,7 @@ function SeverityMiniBars({ rows }: { rows?: Row[] }) {
   return (
     <div className="mt-3 flex items-end justify-end gap-1.5">
       {data.map((r) => {
-        const color = getSeverityMiniBarColor(r.label);
+        const color = r.color ?? severityChartColor();
 
         return (
           <div
@@ -602,7 +573,6 @@ function SlaTable({ rows }: { rows: any[] }) {
       <ChartCardHeader
         title="SLA by customer"
         subtitle="Closed alerts in the selected period"
-        total={rows.length}
       />
 
       {rows.length === 0 ? (
@@ -795,6 +765,12 @@ function normalizeDashboard(raw: any) {
 }
 
 export default function Dashboard() {
+  const { catalog } = useCatalog();
+  const withSeverityColors = (rows: Row[]) => rows.map(row => {
+    const code = row.key ?? "";
+    const color = catalog?.severityColorsByCode?.[code] ?? catalog?.severityColorsByCode?.[code.toLowerCase()] ?? legacySeverityColor(code);
+    return { ...row, color: severityChartColor(color) };
+  });
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -1052,7 +1028,7 @@ export default function Dashboard() {
             title="Cases still opened"
             value={k.cases_open}
             subtitle="Current backlog"
-            severityRows={k.open_cases_by_severity ?? []}
+            severityRows={withSeverityColors(k.open_cases_by_severity ?? [])}
           />
         );
 
@@ -1062,7 +1038,7 @@ export default function Dashboard() {
             title="Alerts still opened"
             value={k.alerts_open}
             subtitle="Current backlog"
-            severityRows={k.open_alerts_by_severity ?? []}
+            severityRows={withSeverityColors(k.open_alerts_by_severity ?? [])}
           />
         );
 
@@ -1179,7 +1155,7 @@ export default function Dashboard() {
         return (
           <PieCard
             title="Cases by severity"
-            rows={charts.cases_by_severity_period ?? []}
+            rows={withSeverityColors(charts.cases_by_severity_period ?? [])}
             subtitle={periodLabel}
           />
         );
@@ -1275,7 +1251,6 @@ export default function Dashboard() {
             <ChartCardHeader
               title="My open cases"
               subtitle="Assigned cases currently in progress"
-              total={data.personal.my_open_cases?.length ?? 0}
             />
 
             <div className="divide-y divide-border">
@@ -1417,7 +1392,7 @@ export default function Dashboard() {
             Dashboard
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Indicators across your selected activity window.
+            Your SOC at a glance.
           </div>
         </div>
 
@@ -1437,7 +1412,7 @@ export default function Dashboard() {
           <div className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border bg-card px-3 shadow-sm">
             <LayoutGrid className="h-4 w-4 text-muted-foreground" />
             <select
-              className="border-none bg-transparent pr-2 text-sm text-foreground outline-none"
+              className="cursor-pointer border-none bg-transparent pr-2 text-sm text-foreground outline-none transition hover:scale-[1.05]"
               value={period}
               onChange={(e) =>
                 setPeriod(e.target.value as DashboardQueryParams["period"])
@@ -1478,20 +1453,25 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => setWidgetsOpen((v) => !v)}
-            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border bg-card px-3 text-sm text-foreground shadow-sm transition hover:bg-accent/40"
+            className="group inline-flex h-10 cursor-pointer items-center gap-2 rounded-2xl border border-border bg-card px-3 text-sm text-foreground shadow-sm transition hover:bg-accent/40"
           >
             <Settings2 className="h-4 w-4 text-muted-foreground" />
-            Widgets
+            <span className="transition group-hover:scale-[1.05]">Widgets</span>
           </button>
 
           <button
             type="button"
-            onClick={handleResetWidgets}
-            disabled={savingLayout}
-            className="inline-flex h-10 items-center gap-2 rounded-2xl border border-border bg-card px-3 text-sm text-foreground shadow-sm transition hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-60"
+            onClick={() => {
+              setCustomerId("");
+              setSubgroupIds([]);
+              setPeriod("last_90d");
+              setDateFrom("");
+              setDateTo("");
+            }}
+            className="group inline-flex h-10 cursor-pointer items-center gap-2 rounded-2xl border border-border bg-card px-3 text-sm text-foreground shadow-sm transition hover:bg-accent/40"
           >
             <RotateCcw className="h-4 w-4 text-muted-foreground" />
-            Reset view
+            <span className="transition group-hover:scale-[1.05]">Reset filters</span>
           </button>
         </div>
       </div>
@@ -1508,9 +1488,20 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {savingLayout ? (
-              <div className="text-xs text-muted-foreground">Saving…</div>
-            ) : null}
+            <div className="flex items-center gap-3">
+              {savingLayout ? (
+                <div className="text-xs text-muted-foreground">Saving…</div>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleResetWidgets}
+                disabled={savingLayout}
+                className="group inline-flex h-10 cursor-pointer items-center gap-2 whitespace-nowrap rounded-2xl border border-border bg-card px-3 text-sm text-foreground shadow-sm transition hover:bg-accent/40 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RotateCcw className="h-4 w-4 text-muted-foreground" />
+                <span className="transition group-hover:scale-[1.05]">Reset to default</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -1557,7 +1548,7 @@ export default function Dashboard() {
       ) : null}
 
       {otherWidgets.length > 0 ? (
-        <div className="grid gap-4 2xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 2xl:grid-cols-2">
           {otherWidgets.map(renderWrappedWidget)}
         </div>
       ) : null}

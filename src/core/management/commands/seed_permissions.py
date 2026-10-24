@@ -24,7 +24,7 @@ DEFAULT_PERMS = [
 
     # Tasks
     ("task.view", "View tasks"),
-    ("task.add", "Add tasks"),
+    ("task.add", "Manage own tasks"),
     ("task.manage", "Manage all tasks"),
 
     # Settings / RBAC / Users

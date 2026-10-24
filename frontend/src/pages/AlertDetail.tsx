@@ -48,6 +48,7 @@ import {
 } from "../components/ui/IconButton";
 import MarkdownEditor from "../components/ui/MarkdownEditor";
 import MarkdownRenderedContent from "../components/ui/MarkdownRenderedContent";
+import type { MarkdownLinkAction } from "../components/ui/markdownLinks";
 
 
 type KVRow = {
@@ -367,6 +368,7 @@ export default function AlertDetail() {
 
   const [editDescription, setEditDescription] = useState("");
   const [descriptionActionsVisible, setDescriptionActionsVisible] = useState(false);
+  const [linkAction, setLinkAction] = useState<{ target: string; request: MarkdownLinkAction } | null>(null);
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const [descriptionOverflow, setDescriptionOverflow] = useState(false);
   const descriptionContentRef = useRef<HTMLDivElement | null>(null);
@@ -655,6 +657,7 @@ export default function AlertDetail() {
   }
 
   function startEditComment(c: AlertComment) {
+    setLinkAction(null);
     setEditingCommentId(c.id);
     setEditingText(String(c.text ?? ""));
   }
@@ -784,7 +787,7 @@ export default function AlertDetail() {
           <span className="min-w-0 truncate" title={item.title}>{item.title}</span>
         </div>
         <div className="min-w-0 text-right text-muted-foreground leading-4">
-          <div className="break-all text-[10px] leading-4">Alert ID: {item.id}</div>
+          <div className="break-all text-[10px] leading-4">Alert UUID: {item.id}</div>
           <div className="text-[10px] italic leading-4">Raised {formatDate(item.created_at)}</div>
         </div>
       </nav>
@@ -1042,13 +1045,14 @@ export default function AlertDetail() {
               <SaveButton onClick={() => void saveDescriptionFromEditor()} disabled={busyAction || !canUpdate} title="Save description" />
               <CancelButton onClick={cancelDescriptionEdit} disabled={busyAction} title="Cancel description" />
             </> : <>
-              {canUpdate ? <EditGenButton onClick={() => { setEditDescription(item.description || ""); alertDescFocusedRef.current = true; setDescriptionActionsVisible(true); }} disabled={busyAction} title="Edit description" /> : null}
+              {canUpdate ? <EditGenButton onClick={() => { setLinkAction(null); setEditDescription(item.description || ""); alertDescFocusedRef.current = true; setDescriptionActionsVisible(true); }} disabled={busyAction} title="Edit description" /> : null}
             </>}
           </div>
         </div>
         {descriptionActionsVisible ? <MarkdownEditor
           alwaysShowToolbar
           value={editDescription ?? ""}
+          initialLinkAction={linkAction?.target === "description" ? linkAction.request : undefined}
           onChange={setEditDescription}
           disabled={busyAction || !canUpdate}
           placeholder="Write a description..."
@@ -1056,10 +1060,15 @@ export default function AlertDetail() {
         /> : <>
           <div className={descriptionExpanded ? "min-w-0" : "max-h-96 min-w-0 overflow-hidden"}>
             <div ref={descriptionContentRef} className="min-w-0 break-words [overflow-wrap:anywhere]">
-              {item.description ? <MarkdownRenderedContent markdown={item.description} /> : <span className="text-sm text-muted-foreground">No description</span>}
+              {item.description ? <MarkdownRenderedContent markdown={item.description} requireLinkModifier onEditLink={canUpdate && !busyAction ? request => {
+                setEditDescription(item.description || "");
+                alertDescFocusedRef.current = true;
+                setDescriptionActionsVisible(true);
+                setLinkAction({ target: "description", request });
+              } : undefined} /> : <span className="text-sm text-muted-foreground">No description</span>}
             </div>
           </div>
-          {descriptionOverflow ? <button type="button" aria-expanded={descriptionExpanded} className="mx-auto mt-2 block rounded-xl px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => setDescriptionExpanded(value => !value)}>{descriptionExpanded ? "Show less" : "Show more"}</button> : null}
+          {descriptionOverflow ? <button type="button" aria-expanded={descriptionExpanded} className="mx-auto mt-2 block min-w-32 rounded-xl border border-border bg-muted/50 px-6 py-1 text-xs font-medium text-foreground transition hover:bg-accent" onClick={() => setDescriptionExpanded(value => !value)}>{descriptionExpanded ? "Show less" : "Show more"}</button> : null}
         </>}
       </Card>
 
@@ -1232,6 +1241,7 @@ export default function AlertDetail() {
                       <MarkdownEditor
                         alwaysShowToolbar
                         value={editingText}
+                        initialLinkAction={linkAction?.target === c.id ? linkAction.request : undefined}
                         onChange={(v) => setEditingText(v)}
                         disabled={busyAction || !canUpdate || commentBusyId === c.id}
                         placeholder="Edit note..."
@@ -1241,7 +1251,12 @@ export default function AlertDetail() {
                   ) : (
                     <div className="mt-2 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">
                       <MarkdownRenderedContent
+                        requireLinkModifier
                         markdown={String(c.text || "")}
+                        onEditLink={canUpdate && !busyAction && commentBusyId !== c.id ? request => {
+                          startEditComment(c);
+                          setLinkAction({ target: c.id, request });
+                        } : undefined}
                         className="min-w-0 max-w-full !rounded-none !border-0 !bg-transparent !shadow-none [&_[contenteditable=false]]:!p-0"
                       />
                     </div>

@@ -28,6 +28,8 @@ import "@mdxeditor/editor/style.css";
 import "./markdownCodeBlocks.css";
 import { markdownCodeBlockExtensions } from "./markdownCodeBlocks";
 import { strictMarkdownPlugin } from "./strictMarkdownPlugin";
+import { markdownLinkActionsPlugin, type MarkdownLinkAction, type MarkdownLinkController } from "./markdownLinks";
+import "./markdownLinks.css";
 import {
   markdownForMdxEditor,
   shouldOpenMarkdownEditorLink,
@@ -42,12 +44,15 @@ type Props = {
   placeholder?: string;
   className?: string;
   alwaysShowToolbar?: boolean;
+  initialLinkAction?: MarkdownLinkAction;
 };
 
 export default function MarkdownEditor(props: Props) {
   const editorRef = useRef<MDXEditorMethods | null>(null);
   const synchronizedEditorRef = useRef<MDXEditorMethods | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const linkController = useRef<MarkdownLinkController | null>(null);
+  const appliedLinkAction = useRef<MarkdownLinkAction | undefined>(undefined);
   const lastValueRef = useRef(props.value || "");
   const focusedRef = useRef(false);
   const skipNextBlurRef = useRef(false);
@@ -72,6 +77,7 @@ export default function MarkdownEditor(props: Props) {
       headingsPlugin(),
       listsPlugin(),
       linkDialogPlugin(),
+      markdownLinkActionsPlugin({ onReady: controller => { linkController.current = controller; } }),
       quotePlugin(),
       linkPlugin(),
       tablePlugin(),
@@ -156,6 +162,17 @@ export default function MarkdownEditor(props: Props) {
 
     applyingExternalValueRef.current = false;
   }, [editorReady, props.value]);
+
+  useEffect(() => {
+    const request = props.initialLinkAction;
+    if (!editorReady || props.disabled || !request || appliedLinkAction.current === request) return;
+    const frame = requestAnimationFrame(() => {
+      if (!rootRef.current || !linkController.current) return;
+      appliedLinkAction.current = request;
+      linkController.current.apply(request, rootRef.current);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editorReady, props.disabled, props.initialLinkAction]);
 
   useEffect(() => {
     if (!parseFailed || focusedRef.current) return;
@@ -709,56 +726,6 @@ export default function MarkdownEditor(props: Props) {
           background-color: hsl(var(--accent)) !important;
         }
 
-        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] {
-          background: hsl(var(--popover)) !important;
-          color: hsl(var(--popover-foreground)) !important;
-          border-color: hsl(var(--border)) !important;
-        }
-
-        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"]:has([data-testid="link-dialog-preview"]) {
-          gap: 0.125rem !important;
-          padding: 0.125rem 0.25rem !important;
-        }
-
-        [data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"] {
-          color: hsl(var(--popover-foreground)) !important;
-          line-height: 1.125rem;
-          margin-right: 0.125rem !important;
-        }
-
-        [data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"]:hover {
-          color: hsl(var(--primary)) !important;
-        }
-
-        [data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"] svg {
-          width: 0.875rem;
-          height: 0.875rem;
-          color: currentColor !important;
-          stroke: currentColor !important;
-        }
-
-        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] {
-          padding: 0.125rem !important;
-          color: hsl(var(--popover-foreground)) !important;
-          line-height: 0;
-          border-radius: 0.375rem;
-        }
-
-        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] svg {
-          width: 1rem;
-          height: 1rem;
-          color: currentColor !important;
-          stroke: currentColor !important;
-        }
-
-        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] svg * {
-          stroke: currentColor !important;
-        }
-
-        [data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"]:hover {
-          background: hsl(var(--accent)) !important;
-          color: hsl(var(--accent-foreground)) !important;
-        }
 
         [data-radix-popper-content-wrapper] form[class*="_linkDialogEditForm"] label {
           color: hsl(var(--popover-foreground)) !important;

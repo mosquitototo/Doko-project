@@ -5426,6 +5426,15 @@ def _limit_tasks_to_permission(qs, user, code: str, *, allow_owner=False):
     return qs.filter(scoped).distinct()
 
 
+def _limit_tasks_to_edit_permission(qs, user):
+    managed = _limit_tasks_to_permission(qs, user, "task.manage")
+    owned = _limit_tasks_to_permission(qs.filter(owner=user), user, "task.add")
+    if not is_doko_admin(user):
+        managed = managed.exclude(customers__in=Customer.objects.exclude(id__in=_task_permission_customer_ids(user, "task.manage")))
+        owned = owned.exclude(customers__in=Customer.objects.exclude(id__in=_task_permission_customer_ids(user, "task.add")))
+    return qs.filter(Q(pk__in=managed.values("pk")) | Q(pk__in=owned.values("pk"))).distinct()
+
+
 class TaskListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
 
@@ -5574,13 +5583,7 @@ class TaskRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             return _limit_tasks_to_permission(qs, self.request.user, "task.manage")
 
         if self.request.method in ("PATCH", "PUT"):
-            managed = _limit_tasks_to_permission(qs, self.request.user, "task.manage")
-            owned = _limit_tasks_to_permission(
-                qs.filter(owner=self.request.user),
-                self.request.user,
-                "task.add",
-            )
-            return qs.filter(Q(pk__in=managed.values("pk")) | Q(pk__in=owned.values("pk"))).distinct()
+            return _limit_tasks_to_edit_permission(qs, self.request.user)
 
         return _limit_tasks_to_permission(qs, self.request.user, "task.view", allow_owner=True)
 
@@ -5675,13 +5678,17 @@ class TaskCommentListCreateView(generics.ListCreateAPIView):
     pagination_class = None
 
     def initial(self, request, *args, **kwargs):
-        self.required_permission = "task.view" if request.method == "GET" else "task.manage"
+        self.required_permission = "task.view" if request.method == "GET" else (
+            "task.manage" if _user_can_manage_tasks(request.user) else "task.add"
+        )
         super().initial(request, *args, **kwargs)
 
     def get_task(self) -> Task:
         qs = Task.objects.filter(id=self.kwargs["task_id"], is_deleted=False)
 
-        if not self.request.user.is_staff:
+        if self.request.method == "POST":
+            qs = _limit_tasks_to_edit_permission(qs, self.request.user)
+        elif not self.request.user.is_staff:
             customer_ids = get_accessible_customer_ids(self.request.user)
             qs = qs.filter(
                 Q(customers__id__in=customer_ids) |
@@ -5696,7 +5703,7 @@ class TaskCommentListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         task = self.get_task()
-        return TaskComment.objects.filter(task=task).order_by("created_at")
+        return TaskComment.objects.filter(task=task).select_related("author__profile").order_by("created_at")
 
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()
@@ -5728,7 +5735,9 @@ class TaskCommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView
     permission_classes = [IsAuthenticated, HasPermissionCode]
 
     def initial(self, request, *args, **kwargs):
-        self.required_permission = "task.view" if request.method == "GET" else "task.manage"
+        self.required_permission = "task.view" if request.method == "GET" else (
+            "task.manage" if _user_can_manage_tasks(request.user) else "task.add"
+        )
         super().initial(request, *args, **kwargs)
 
     def get_object(self):
@@ -5741,7 +5750,10 @@ class TaskCommentRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView
         if not obj:
             raise PermissionDenied("Comment not found.")
 
-        if not self.request.user.is_staff:
+        if self.request.method in ("PATCH", "PUT", "DELETE"):
+            if not _limit_tasks_to_edit_permission(Task.objects.filter(pk=obj.task_id), self.request.user).exists():
+                raise PermissionDenied("Comment not accessible.")
+        elif not self.request.user.is_staff:
             customer_ids = get_accessible_customer_ids(self.request.user)
             allowed = (
                 obj.task.owner_id == self.request.user.id

@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   MDXEditor,
   codeBlockPlugin,
   codeMirrorPlugin,
   headingsPlugin,
   linkPlugin,
+  linkDialogPlugin,
   listsPlugin,
   markdownShortcutPlugin,
   quotePlugin,
@@ -14,12 +15,17 @@ import {
 import "@mdxeditor/editor/style.css";
 import "./markdownCodeBlocks.css";
 import { markdownCodeBlockExtensions } from "./markdownCodeBlocks";
-import { markdownForMdxEditor } from "./markdownForEditor";
+import { markdownForMdxEditor, shouldOpenMarkdownEditorLink } from "./markdownForEditor";
 import { strictMarkdownPlugin } from "./strictMarkdownPlugin";
+import { markdownLinkActionsPlugin, textLinksPlugin, type MarkdownLinkAction, type MarkdownLinkController } from "./markdownLinks";
+import "./markdownLinks.css";
 
 type Props = {
   markdown: string;
   className?: string;
+  requireLinkModifier?: boolean;
+  onEditLink?: (request: MarkdownLinkAction) => void;
+  linksAsText?: boolean;
 };
 
 export default function MarkdownRenderedContent(props: Props) {
@@ -27,6 +33,9 @@ export default function MarkdownRenderedContent(props: Props) {
 }
 
 function MarkdownReadOnly(props: Props) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const linkController = useRef<MarkdownLinkController | null>(null);
+  const selectedLink = useRef<Omit<MarkdownLinkAction, "action"> | null>(null);
   const [parseFailed, setParseFailed] = useState(false);
   const content = useMemo(() => {
     try {
@@ -40,7 +49,11 @@ function MarkdownReadOnly(props: Props) {
       headingsPlugin(),
       listsPlugin(),
       quotePlugin(),
-      linkPlugin(),
+      props.linksAsText ? textLinksPlugin() : linkPlugin(),
+      ...(props.requireLinkModifier ? [
+        linkDialogPlugin(),
+        markdownLinkActionsPlugin({ onReady: controller => { linkController.current = controller; } }),
+      ] : []),
       tablePlugin(),
       thematicBreakPlugin(),
       markdownShortcutPlugin(),
@@ -66,11 +79,52 @@ function MarkdownReadOnly(props: Props) {
       }),
       strictMarkdownPlugin(),
     ],
-    [],
+    [props.requireLinkModifier, props.linksAsText],
   );
+
+  useEffect(() => {
+    if (!props.requireLinkModifier) return;
+    const outside = (event: PointerEvent) => {
+      const target = event.target as Element;
+      if (linkController.current?.containsPopup(target)) return;
+      if (rootRef.current?.contains(target) && target.closest("a[href]")) return;
+      linkController.current?.close();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") linkController.current?.close();
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      linkController.current?.close();
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [props.requireLinkModifier]);
 
   return (
     <div
+      ref={rootRef}
+      onClickCapture={(event) => {
+        if (!props.requireLinkModifier) return;
+        const button = (event.target as Element | null)?.closest("button[aria-label]");
+        const label = button?.getAttribute("aria-label");
+        if (button?.closest('[class*="_linkDialogPopoverContent"]') && (label === "Edit link URL" || label === "Remove link")) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (selectedLink.current) props.onEditLink?.({ ...selectedLink.current, action: label === "Remove link" ? "remove" : "edit" });
+          return;
+        }
+        const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+        if (!link || shouldOpenMarkdownEditorLink(event, link.matches('[data-testid="link-dialog-preview"]'))) return;
+        event.preventDefault();
+        const root = rootRef.current;
+        if (!root) return;
+        const index = Array.from(root.querySelectorAll("[contenteditable] a[href]")).indexOf(link);
+        if (index < 0) return;
+        selectedLink.current = { index, url: link.getAttribute("href") || "" };
+        linkController.current?.preview(link);
+      }}
       className={[
         "markdown-rendered-content rounded-2xl border border-border bg-card text-sm text-foreground shadow-sm",
         props.className || "",
@@ -285,6 +339,7 @@ function MarkdownReadOnly(props: Props) {
         </div>
       ) : <MDXEditor
         markdown={content}
+        className={props.requireLinkModifier && !props.onEditLink ? "doko-link-readonly-locked" : undefined}
         suppressHtmlProcessing
         readOnly
         plugins={plugins}

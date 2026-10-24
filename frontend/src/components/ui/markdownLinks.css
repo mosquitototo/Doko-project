@@ -1,0 +1,56 @@
+[data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] {
+  background: hsl(var(--popover)) !important;
+  color: hsl(var(--popover-foreground)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+[data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"]:has([data-testid="link-dialog-preview"]) {
+  gap: 0.125rem !important;
+  padding: 0.125rem 0.25rem !important;
+}
+
+[data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"] {
+  color: hsl(var(--popover-foreground)) !important;
+  line-height: 1.125rem;
+  margin-right: 0.125rem !important;
+}
+
+[data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"]:hover {
+  color: hsl(var(--primary)) !important;
+}
+
+[data-radix-popper-content-wrapper] [data-testid="link-dialog-preview"] svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: currentColor !important;
+  stroke: currentColor !important;
+}
+
+[data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] {
+  padding: 0.125rem !important;
+  color: hsl(var(--popover-foreground)) !important;
+  line-height: 0;
+  border-radius: 0.375rem;
+}
+
+[data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] svg {
+  width: 1rem;
+  height: 1rem;
+  color: currentColor !important;
+  stroke: currentColor !important;
+}
+
+[data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"] svg * {
+  stroke: currentColor !important;
+}
+
+[data-radix-popper-content-wrapper] [class*="_linkDialogPopoverContent"] > [class*="_actionButton"]:hover {
+  background: hsl(var(--accent)) !important;
+  color: hsl(var(--accent-foreground)) !important;
+}
+
+
+.doko-link-readonly-locked [class*="_linkDialogPopoverContent"] button[aria-label="Edit link URL"],
+.doko-link-readonly-locked [class*="_linkDialogPopoverContent"] button[aria-label="Remove link"] {
+  display: none;
+}

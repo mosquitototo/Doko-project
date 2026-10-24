@@ -1,4 +1,4 @@
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS frontend
+FROM node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS frontend
 
 WORKDIR /frontend
 
@@ -8,7 +8,7 @@ RUN npm ci --ignore-scripts
 COPY frontend/ ./
 RUN npm run build
 
-FROM nginx:1.30.2-alpine@sha256:5f979dcfed4ce6461873f087e8c980d6e29b084b9e8776d9704a7e989b5f4898
+FROM nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
 
 COPY docker/nginx/nginx.conf /etc/nginx/nginx.conf
 COPY --from=frontend /frontend/dist /usr/share/nginx/html

@@ -5,6 +5,7 @@ import StatusBadge from "../components/ui/StatusBadge";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import ConfirmDialogWide from "../components/ui/ConfirmDialogWide";
 import { useUiAccess } from "../hooks/useUiAccess";
+import { readListFilters, saveListFilters } from "../utils/listViewSession";
 import { fetchUsersLite, type UserLite } from "../api/usersLite";
 import { listCustomers, type Customer } from "../api/settingsCustomers";
 import MultiSelectCombobox, { type MultiSelectComboboxOption } from "../components/ui/MultiSelectCombobox";
@@ -233,6 +234,8 @@ function DueDatePill({ dueDate, dueState }: { dueDate?: string | null; dueState?
 }
 
 export default function Tasks() {
+    const { me, push, can, deny, handlePassiveLoadError, handleActionError } = useUiAccess();
+    const [initialFilters] = useState(() => readListFilters("tasks", me?.id));
     const [mineItems, setMineItems] = useState<TaskListItem[]>([]);
     const [allItems, setAllItems] = useState<TaskListItem[]>([]);
     const [mineServerCount, setMineServerCount] = useState(0);
@@ -241,17 +244,16 @@ export default function Tasks() {
     const mineItemsArr = useMemo(() => (Array.isArray(mineItems) ? mineItems : []), [mineItems]);
     const allItemsArr = useMemo(() => (Array.isArray(allItems) ? allItems : []), [allItems]);
 
-    const [status, setStatus] = useState<string[]>([]);
-    const [priority, setPriority] = useState<string[]>([]);
-    const [owner, setOwner] = useState<string[]>([]);
-    const [customer, setCustomer] = useState<string[]>([]);
+    const [status, setStatus] = useState<string[]>(initialFilters.status ?? []);
+    const [priority, setPriority] = useState<string[]>(initialFilters.priority ?? []);
+    const [owner, setOwner] = useState<string[]>(initialFilters.owner ?? []);
+    const [customer, setCustomer] = useState<string[]>(initialFilters.customer ?? []);
     const [page, setPage] = useState(1);
-    const [search, setSearch] = useState("");
-    const [ordering, setOrdering] = useState("-updated_at");
-    const [filtersOpen, setFiltersOpen] = useState(false);
+    const [search, setSearch] = useState((initialFilters.searchInput ?? "").trim());
+    const [ordering, setOrdering] = useState(initialFilters.ordering ?? "-updated_at");
+    const [filtersOpen, setFiltersOpen] = useState(initialFilters.filtersOpen ?? false);
 
     const navigate = useNavigate();
-    const { me, push, can, deny, handlePassiveLoadError, handleActionError } = useUiAccess();
 
     const canViewTask = can("task.view") || can("task.manage");
     const canAddTask = can("task.add");
@@ -260,7 +262,10 @@ export default function Tasks() {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const [searchInput, setSearchInput] = useState("");
+    const [searchInput, setSearchInput] = useState(initialFilters.searchInput ?? "");
+    useEffect(() => {
+        saveListFilters("tasks", me?.id, { status, priority, owner, customer, searchInput, ordering, filtersOpen });
+    }, [status, priority, owner, customer, searchInput, ordering, filtersOpen, me?.id]);
     useEffect(() => {
         const t = setTimeout(() => {
         setPage(1);
@@ -763,25 +768,19 @@ export default function Tasks() {
         </div>
 
         <Card className="relative z-20 overflow-visible p-5">
-            <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2">
-                <div className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border bg-background text-muted-foreground">
+            <button type="button" onClick={() => setFiltersOpen(v => !v)} aria-expanded={filtersOpen} className="flex w-full cursor-pointer items-center justify-between gap-3 text-left">
+            <span className="flex items-center gap-2">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl border border-border bg-background text-muted-foreground">
                 <SlidersHorizontal className="h-4 w-4" />
-                </div>
-                <div>
-                <div className="text-sm font-semibold text-foreground">Filters</div>
-                <div className="text-xs text-muted-foreground">Narrow the visible task scope</div>
-                </div>
-            </div>
-
-            <button
-                type="button"
-                onClick={() => setFiltersOpen((v) => !v)}
+                </span>
+                <span className="text-sm font-semibold text-foreground">Filters</span>
+            </span>
+            <span
                 className="rounded-2xl border cursor-pointer border-border bg-card px-3 py-2 text-xs font-medium text-foreground transition hover:bg-accent"
             >
                 {filtersOpen ? "Collapse" : "Expand"}
+            </span>
             </button>
-            </div>
 
             {filtersOpen ? (
             <div className="mt-4 grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
@@ -1456,6 +1455,7 @@ export default function Tasks() {
                 <div>
                 <FieldLabel>Description</FieldLabel>
                 <MarkdownEditor
+                alwaysShowToolbar
                 value={draftDescription}
                 onChange={setDraftDescription}
                 disabled={createBusy}

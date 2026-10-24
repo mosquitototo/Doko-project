@@ -4,6 +4,8 @@ import Card from "../components/ui/Card";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import MarkdownEditor from "../components/ui/MarkdownEditor";
 import MarkdownRenderedContent from "../components/ui/MarkdownRenderedContent";
+import type { MarkdownLinkAction } from "../components/ui/markdownLinks";
+import UserAvatar from "../components/ui/UserAvatar";
 import StatusBadge from "../components/ui/StatusBadge";
 import MultiSelectCombobox, { type MultiSelectComboboxOption } from "../components/ui/MultiSelectCombobox";
 import {
@@ -403,7 +405,7 @@ export default function TaskDetail() {
     const { id } = useParams();
     const taskId = id || "";
     const navigate = useNavigate();
-    const { push, can, deny, handleActionError } = useUiAccess();
+    const { me, push, can, deny, handleActionError } = useUiAccess();
 
     const [users, setUsers] = useState<UserLite[]>([]);
     const [customers, setCustomers] = useState<Customer[]>([]);
@@ -421,6 +423,11 @@ export default function TaskDetail() {
     const [titleActionsVisible, setTitleActionsVisible] = useState(false);
     const [editDescription, setEditDescription] = useState("");
     const [descriptionActionsVisible, setDescriptionActionsVisible] = useState(false);
+    const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+    const [descriptionOverflow, setDescriptionOverflow] = useState(false);
+    const [noteEditorOpen, setNoteEditorOpen] = useState(false);
+    const [linkAction, setLinkAction] = useState<{ target: string; request: MarkdownLinkAction } | null>(null);
+    const descriptionContentRef = useRef<HTMLDivElement | null>(null);
     const [editStatus, setEditStatus] = useState<TaskStatus>("to_do");
     const [editPriority, setEditPriority] = useState<TaskPriority>("medium");
     const [editDueDate, setEditDueDate] = useState("");
@@ -452,11 +459,12 @@ export default function TaskDetail() {
     );
 
     const ownerLabel =
-      usersArr.find((u) => String(u.id) === String(editOwnerId))?.username || "Unassigned";
+      usersArr.find((u) => String(u.id) === String(editOwnerId))?.username ||
+      (String(task?.owner_id_read ?? "") === editOwnerId ? task?.owner_username : null) || "Unassigned";
 
-    const selectedCustomerNames = editCustomerIds
-      .map((id) => customersArr.find((c) => String(c.id) === String(id))?.name)
-      .filter(Boolean) as string[];
+    const selectedCustomerNames = JSON.stringify(editCustomerIds) === JSON.stringify(task?.customer_ids ?? [])
+      ? task?.customer_names ?? []
+      : editCustomerIds.map((id) => customersArr.find((c) => String(c.id) === String(id))?.name).filter(Boolean) as string[];
 
     const customerBadgeLabel =
       selectedCustomerNames.length === 0
@@ -475,8 +483,25 @@ export default function TaskDetail() {
     const saveQueuedRef = useRef(false);
 
     const canViewTask = can("task.view") || can("task.manage");
-    const canUpdateTask = can("task.add") || can("task.manage");
+    const canUpdateTask = can("task.manage") || (can("task.add") && task?.owner_id_read === me?.id);
     const canDeleteTask = can("task.manage");
+
+    useEffect(() => {
+      const element = descriptionContentRef.current;
+      if (!element) return;
+      const measure = () => setDescriptionOverflow(element.scrollHeight > 384);
+      measure();
+      const observer = new ResizeObserver(measure);
+      observer.observe(element);
+      return () => observer.disconnect();
+    }, [task?.description, descriptionActionsVisible]);
+
+    function startDescriptionEdit(request?: MarkdownLinkAction) {
+      setEditDescription(task?.description ?? "");
+      descFocusedRef.current = true;
+      setDescriptionActionsVisible(true);
+      setLinkAction(request ? { target: "description", request } : null);
+    }
 
     async function refreshAll() {
         if (!taskId) return;
@@ -531,7 +556,7 @@ export default function TaskDetail() {
             JSON.stringify([...editCustomerIds].map(String).sort()) ===
             JSON.stringify([...(((task as any).customer_ids ?? []) as string[])].map(String).sort());
 
-        if (noChange) return;
+        if (noChange) return true;
 
         saveInFlightRef.current = true;
         setBusy(true);
@@ -546,9 +571,9 @@ export default function TaskDetail() {
             customer_ids: editCustomerIds,
         });
         setTask((prev) => ({ ...(prev as any), ...(updated as any) }));
-        push({ kind: "success", title: "Saved" });
         window.dispatchEvent(new CustomEvent("doko:tasks-changed"));
         await refreshAll();
+        return true;
         } catch (e: any) {
         handleActionError(e, "update tasks", "Unable to update task.");
         } finally {
@@ -568,8 +593,7 @@ export default function TaskDetail() {
         due_date: string | null;
         owner_id: number | null;
         customer_ids: string[];
-      }>,
-      successTitle: string
+      }>
     ) {
       if (!canUpdateTask) {
         deny("update tasks");
@@ -583,7 +607,6 @@ export default function TaskDetail() {
       try {
         const updated = await patchTask(taskId, payload);
         setTask((prev) => ({ ...(prev as any), ...(updated as any) }));
-        push({ kind: "success", title: successTitle });
         window.dispatchEvent(new CustomEvent("doko:tasks-changed"));
         await refreshAll();
       } catch (e: any) {
@@ -611,9 +634,10 @@ export default function TaskDetail() {
     }
 
     async function saveDescriptionFromEditor() {
-        await saveIfDirty();
-        descFocusedRef.current = false;
-        setDescriptionActionsVisible(false);
+        if (await saveIfDirty()) {
+            descFocusedRef.current = false;
+            setDescriptionActionsVisible(false);
+        }
     }
 
     function cancelDescriptionEdit() {
@@ -632,8 +656,8 @@ export default function TaskDetail() {
     setCommentSubmitting(true);
     try {
         const created = await createTaskComment(taskId, { text: commentText });
-        push({ kind: "success", title: "Comment added" });
         setCommentText("");
+        setNoteEditorOpen(false);
 
         if (created && created.id) {
         setComments((prev) => [...prev, created]);
@@ -648,6 +672,7 @@ export default function TaskDetail() {
     }
 
     function startEditComment(c: TaskComment) {
+        setLinkAction(null);
         setEditingCommentId(c.id);
         setEditingText(String(c.text || ""));
     }
@@ -683,7 +708,6 @@ export default function TaskDetail() {
           )
         );
 
-        push({ kind: "success", title: "Comment updated" });
         cancelEditComment();
       } catch (e: any) {
         handleActionError(e, "edit task comments", "Unable to update comment.");
@@ -703,7 +727,6 @@ export default function TaskDetail() {
         setCommentBusyId(target);
         try {
         await deleteTaskComment(target);
-        push({ kind: "success", title: "Comment deleted" });
         await refreshAll();
         } catch (e: any) {
         handleActionError(e, "delete task comments", "Unable to delete comment.");
@@ -729,7 +752,6 @@ export default function TaskDetail() {
                 }
                 : prev
             );
-        push({ kind: "success", title: "Case linked" });
         setSelectedCaseId("");
         await refreshAll();
         } catch (e: any) {
@@ -755,7 +777,6 @@ export default function TaskDetail() {
                 }
                 : prev
             );
-        push({ kind: "success", title: "Case unlinked" });
         await refreshAll();
         } catch (e: any) {
         handleActionError(e, "unlink cases from tasks", "Unable to unlink case.");
@@ -872,31 +893,28 @@ export default function TaskDetail() {
 
 return (
   <div className="space-y-6">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>Last update {formatDate(task.updated_at)}</span>
-        <span className="font-mono">Task {task.id}</span>
-      </div>
+      <nav aria-label="Task navigation" className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border pb-2 text-xs text-muted-foreground">
+        <div className="flex min-w-0 basis-full items-center gap-2 sm:flex-1 sm:basis-0 sm:pr-8">
+          <LeftButton onClick={() => navigate("/tasks")} title="Back" iconOnly className="h-8 w-8 shrink-0 border-transparent bg-transparent p-1 shadow-none" />
+          <Link to="/tasks" className="hover:underline">Tasks</Link>
+          <span aria-hidden="true">›</span>
+          <span className="min-w-0 max-w-lg truncate" title={task.title}>{task.title}</span>
+        </div>
+        <div className="ml-auto max-w-full text-right leading-4">
+          <div className="break-all text-[10px] leading-4">Task UUID: {task.id}</div>
+          <div className="text-[10px] italic leading-4">Last update {formatDate(task.updated_at)}</div>
+        </div>
+      </nav>
 
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+      <div className="!mt-3 flex min-w-0 flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Task
-            </div>
-            <div className="mb-1 flex h-8 items-center">
-              <LeftButton
-                onClick={() => navigate("/tasks")}
-                title="Back"
-                iconOnly
-                className="px-1 py-1 h-fit min-h-0 line-height-none"
-              />
-            </div>
             <div
               ref={titleEditableRef}
               contentEditable={canUpdateTask && !busy}
               role="textbox"
               tabIndex={0}
               suppressContentEditableWarning
-              className="text-3xl font-semibold tracking-tight text-foreground outline-none px-1 py-0.5 rounded-md hover:bg-accent/40 focus:bg-accent/40 cursor-text"
+              className="break-words text-2xl font-semibold tracking-tight text-foreground outline-none px-1 py-0.5 rounded-md hover:bg-accent/40 focus:bg-accent/40 cursor-text [overflow-wrap:anywhere]"
               onInput={(e) => {
                 setTitleActionsVisible(true);
                 setEditTitle(e.currentTarget.textContent || "");
@@ -933,7 +951,7 @@ return (
                   value={String(editStatus || "")}
                   onChange={async (next) => {
                     setEditStatus(next as TaskStatus);
-                    await patchTaskInline({ status: next as TaskStatus }, "Status updated");
+                    await patchTaskInline({ status: next as TaskStatus });
                   }}
                   disabled={busy || !canUpdateTask}
                   options={TASK_STATUS_OPTIONS}
@@ -948,7 +966,7 @@ return (
                   value={String(editPriority || "")}
                   onChange={async (next) => {
                     setEditPriority(next as TaskPriority);
-                    await patchTaskInline({ priority: next as TaskPriority }, "Priority updated");
+                    await patchTaskInline({ priority: next as TaskPriority });
                   }}
                   disabled={busy || !canUpdateTask}
                   options={TASK_PRIORITY_OPTIONS}
@@ -964,8 +982,7 @@ return (
                   onChange={async (next) => {
                     setEditOwnerId(next);
                     await patchTaskInline(
-                      { owner_id: next ? Number(next) : null },
-                      "Owner updated"
+                      { owner_id: next ? Number(next) : null }
                     );
                   }}
                   disabled={busy || !canUpdateTask}
@@ -985,13 +1002,12 @@ return (
                   onChange={async (next) => {
                     setEditDueDate(next);
                     await patchTaskInline(
-                      { due_date: localDateTimeInputValueToIso(next) },
-                      "Due date updated"
+                      { due_date: localDateTimeInputValueToIso(next) }
                     );
                   }}
                   onClear={async () => {
                     setEditDueDate("");
-                    await patchTaskInline({ due_date: null }, "Due date cleared");
+                    await patchTaskInline({ due_date: null });
                   }}
                   disabled={busy || !canUpdateTask}
                   ariaLabel="Change due date"
@@ -1005,7 +1021,7 @@ return (
                   onChange={async (next) => {
                     const normalized = next.map(String);
                     setEditCustomerIds(normalized);
-                    await patchTaskInline({ customer_ids: normalized }, "Customers updated");
+                    await patchTaskInline({ customer_ids: normalized });
                   }}
                   disabled={busy || !canUpdateTask}
                   options={customersArr
@@ -1021,13 +1037,6 @@ return (
           </div>
           <div className="flex shrink-0 flex-col items-end gap-3">
             <div className="flex flex-wrap justify-end gap-2">
-              <SaveButton
-                onClick={() => void saveIfDirty()}
-                disabled={busy || !canUpdateTask || !editTitle.trim()}
-                iconOnly={true}
-                label="Save"
-                title="Save"
-              />
               {canDeleteTask ? (
                 <DeleteButton
                   onClick={() => setConfirmDeleteTask(true)}
@@ -1042,118 +1051,107 @@ return (
         </div>
       <div className="space-y-6">
         <div className="min-w-0">
-          <Card className="p-5">
-            <div
-              onFocus={() => {
-                descFocusedRef.current = true;
-                setDescriptionActionsVisible(true);
-              }}
-              onBlur={(e) => {
-                const wrapper = e.currentTarget;
-
-                window.requestAnimationFrame(() => {
-                  const activeElement = document.activeElement;
-
-                  if (activeElement && wrapper.contains(activeElement)) {
-                    return;
-                  }
-
-                  const openMdxDropdown = document.querySelector(
-                    "[role='listbox'], [role='menu'], [data-radix-popper-content-wrapper]"
-                  );
-
-                  if (openMdxDropdown) {
-                    return;
-                  }
-
-                  descFocusedRef.current = false;
-                  setDescriptionActionsVisible(false);
-                });
-              }}
-            >
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-foreground">Description</div>
-                  <div className="text-xs text-muted-foreground">Main task overview and context</div>
-                </div>
-                {descriptionActionsVisible ? (
-                  <div className="flex items-center gap-2">
-                    <SaveButton
-                      onClick={() => void saveDescriptionFromEditor()}
-                      disabled={busy || !canUpdateTask || (editDescription ?? "") === (task.description ?? "")}
-                      title="Save description"
-                    >
-                      Save
-                    </SaveButton>
-                    <CancelButton
-                      onClick={cancelDescriptionEdit}
-                      disabled={busy || !canUpdateTask}
-                      title="Cancel"
-                    />
-                  </div>
-                ) : null}
+      <Card className="min-w-0 p-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-lg font-semibold text-foreground">Description</div>
+            {descriptionActionsVisible ? (
+              <div className="flex items-center gap-2">
+                <SaveButton
+                  onClick={() => void saveDescriptionFromEditor()}
+                  disabled={busy || !canUpdateTask || (editDescription ?? "") === (task.description ?? "")}
+                  title="Save description"
+                >
+                  Save
+                </SaveButton>
+                <CancelButton
+                  onClick={cancelDescriptionEdit}
+                  disabled={busy || !canUpdateTask}
+                  title="Cancel"
+                />
               </div>
+            ) : canUpdateTask ? <EditGenButton onClick={() => startDescriptionEdit()} disabled={busy} title="Edit description" /> : null}
+          </div>
 
-              <MarkdownEditor
-                value={editDescription ?? ""}
-                onChange={(v) => setEditDescription(v)}
-                disabled={busy || !canUpdateTask}
-                placeholder="Write a description..."
-              />
+          {descriptionActionsVisible ? <MarkdownEditor
+            alwaysShowToolbar
+            value={editDescription ?? ""}
+            initialLinkAction={linkAction?.target === "description" ? linkAction.request : undefined}
+            onChange={(v) => setEditDescription(v)}
+            disabled={busy || !canUpdateTask}
+            placeholder="Write a description..."
+            className="text-sm"
+          /> : <>
+            <div className={descriptionExpanded ? "min-w-0" : "max-h-96 min-w-0 overflow-hidden"}>
+              <div ref={descriptionContentRef} className="min-w-0 break-words [overflow-wrap:anywhere]">
+                {task.description ? <MarkdownRenderedContent markdown={task.description} requireLinkModifier onEditLink={canUpdateTask && !busy ? startDescriptionEdit : undefined} /> : <span className="text-sm text-muted-foreground">No description</span>}
+              </div>
             </div>
-          </Card>
+            {descriptionOverflow ? <button type="button" aria-expanded={descriptionExpanded} className="mx-auto mt-2 block min-w-32 rounded-xl border border-border bg-muted/50 px-6 py-1 text-xs font-medium text-foreground transition hover:bg-accent" onClick={() => setDescriptionExpanded(value => !value)}>{descriptionExpanded ? "Show less" : "Show more"}</button> : null}
+          </>}
+      </Card>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(260px,0.36fr)] xl:items-start">
           <div className="min-w-0">
-            <Card className="p-5">
-              <div className="mb-4 flex items-center justify-between gap-3">
+          <Card className="p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold text-foreground">Comments</div>
-                <div className="text-xs text-muted-foreground">Notes, progress and task context</div>
+                <div className="flex items-center gap-2 text-lg font-semibold text-foreground">Comments <span className="rounded-full border border-border bg-background px-2 text-xs font-normal text-muted-foreground">{comments.length}</span></div>
               </div>
+              {!noteEditorOpen && canUpdateTask ? <NewGenButton onClick={() => setNoteEditorOpen(true)} disabled={busy} iconOnly={false} label="Add note" title="Add note" /> : null}
             </div>
 
+            {noteEditorOpen ? <div className="space-y-3">
             <MarkdownEditor
+              alwaysShowToolbar
               value={commentText}
-              onChange={setCommentText}
-              disabled={busy || !canUpdateTask}
+              onChange={(v) => setCommentText(v)}
+              disabled={busy || !canUpdateTask || commentSubmitting}
               placeholder="Write a note..."
               className="text-sm text-foreground"
             />
 
+            <div className="flex justify-end gap-2">
+            <CancelButton onClick={() => { setNoteEditorOpen(false); setCommentText(""); }} disabled={busy || commentSubmitting} title="Cancel note" />
             <NewGenButton
-            onClick={() => void submitComment()}
-            disabled={busy || !canUpdateTask || commentSubmitting || isRichTextEmpty(commentText)}
-            className="mt-3 w-full"
-            iconOnly={false}
-            label={commentSubmitting ? "Adding…" : "Add note"}
-            title="Add note"
+              onClick={() => void submitComment()}
+              disabled={busy || !canUpdateTask || commentSubmitting || isRichTextEmpty(commentText)}
+              iconOnly={false}
+              label="Publish"
+              title="Publish note"
             />
+            </div>
+            </div> : null}
 
             <div className="mt-5 space-y-3">
               {comments.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-8 text-center">
+                <div className="rounded-2xl border border-dashed border-border bg-background/60 px-4 py-3 text-center">
                   <div className="text-sm font-medium text-foreground">No note yet</div>
-                  <div className="mt-1 text-xs text-muted-foreground">Add the first note for this task.</div>
+                  <div className="mt-1 text-xs text-muted-foreground">Add the first comment for this task.</div>
                 </div>
               ) : (
                 comments
                   .slice()
                   .reverse()
-                  .map((c) => (
-                    <div key={c.id} className="rounded-2xl border border-border bg-background p-4 shadow-sm">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-xs text-muted-foreground">
-                          {formatDate(c.created_at)}
-                          {c.author_display ? <span className="ml-1 text-muted-foreground/90">• {c.author_display}</span> : null}
+                  .map((c, index) => (
+                    <div key={c.id} className="relative grid min-w-0 grid-cols-[12px_28px_minmax(0,1fr)] gap-2 sm:gap-3">
+                      <div aria-hidden="true" className="relative flex justify-center">
+                        {index < comments.length - 1 ? <span className="absolute -bottom-3 top-6 border-l border-border" /> : null}
+                        <span className="relative mt-5 h-3 w-3 rounded-full border border-muted-foreground bg-card" />
+                      </div>
+                      <div className="mt-3"><UserAvatar showInitial name={c.author_display} src={c.author_avatar_url} /></div>
+                      <div className="min-w-0 rounded-2xl border border-border bg-background p-3 shadow-sm">
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                        <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                          <span className="break-words text-sm font-semibold text-foreground">{c.author_display || "Unknown author"}</span>
+                          <span className="text-xs text-muted-foreground">{formatDate(c.created_at)}</span>
                         </div>
 
-                        <div className="flex items-center gap-2">
+                        <div className="flex shrink-0 items-center gap-2">
                           {editingCommentId === c.id ? (
                             <>
                               <SaveButton
-                                onClick={() => void saveEditComment(c.id)}
+                                onClick={() => saveEditComment(c.id)}
                                 disabled={busy || !canUpdateTask || commentBusyId === c.id || isRichTextEmpty(editingText)}
                                 title="Save comment"
                               >
@@ -1180,8 +1178,10 @@ return (
                       {editingCommentId === c.id ? (
                         <div className="mt-3">
                           <MarkdownEditor
+                            alwaysShowToolbar
                             value={editingText}
-                            onChange={setEditingText}
+                            initialLinkAction={linkAction?.target === c.id ? linkAction.request : undefined}
+                            onChange={(v) => setEditingText(v)}
                             disabled={busy || !canUpdateTask || commentBusyId === c.id}
                             placeholder="Edit note..."
                             className="text-sm"
@@ -1190,16 +1190,22 @@ return (
                       ) : (
                         <div className="mt-3 min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] [&_*]:max-w-full [&_*]:break-words [&_*]:[overflow-wrap:anywhere] [&_a]:break-all [&_pre]:whitespace-pre-wrap [&_pre]:break-words [&_pre]:[overflow-wrap:anywhere] [&_code]:whitespace-pre-wrap [&_code]:break-words [&_code]:[overflow-wrap:anywhere]">
                           <MarkdownRenderedContent
+                            requireLinkModifier
                             markdown={String(c.text || "")}
-                            className="min-w-0 max-w-full"
+                            onEditLink={canUpdateTask && !busy && commentBusyId !== c.id ? request => {
+                              startEditComment(c);
+                              setLinkAction({ target: c.id, request });
+                            } : undefined}
+                            className="min-w-0 max-w-full !rounded-none !border-0 !bg-transparent !shadow-none [&_[contenteditable=false]]:!p-0"
                           />
                         </div>
                       )}
+                      </div>
                     </div>
                   ))
               )}
             </div>
-            </Card>
+          </Card>
           </div>
 
           <div className="relative z-20">

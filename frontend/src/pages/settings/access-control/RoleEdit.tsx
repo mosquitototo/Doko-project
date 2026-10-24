@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams, useLocation } from "react-router-dom";
+import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import Card from "../../../components/ui/Card";
 import { useToast } from "../../../components/ui/toast";
 import { useMe } from "../../../contexts/MeContext";
@@ -790,27 +790,22 @@ export default function RoleEditPage() {
 
   return (
     <div className="space-y-6">
+      <nav aria-label="Role navigation" className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b border-border pb-2 text-xs text-muted-foreground">
+        <div className="flex min-w-0 basis-full items-center gap-2 sm:flex-1 sm:basis-0 sm:pr-8">
+          <LeftButton onClick={() => navigate("/settings/access-control/roles")} title="Back" iconOnly className="h-8 w-8 shrink-0 border-transparent bg-transparent p-1 shadow-none" />
+          <Link to="/settings/access-control/roles" className="hover:underline">Roles</Link>
+          <span aria-hidden="true">›</span>
+          <span className="min-w-0 max-w-lg truncate" title={isNew ? "New role" : role?.name}>{isNew ? "New role" : role?.name}</span>
+        </div>
+        {!isNew && role ? <div className="ml-auto max-w-full break-all text-right text-[10px] leading-4">Role ID #{role.id}</div> : null}
+      </nav>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-            <div className="mb-1 flex h-8 items-center">
-              <LeftButton
-                onClick={() => navigate("/settings/access-control/roles")}
-                title="Back"
-                iconOnly
-                className="px-1 py-1 h-fit min-h-0 line-height-none"
-              />
-            </div>
           <div className="min-w-0">
             <div className="text-3xl font-semibold tracking-tight text-foreground truncate">
               {isNew ? "Create role" : "Edit role"}
             </div>
-            <div className="mt-1 text-sm text-muted-foreground">
-              {!isNew && role?.name ? (
-                <span className="font-mono">Role ID #{role.id}</span>
-              ) : (
-                "Create a new RBAC role and define its scope."
-              )}
-            </div>
+            {isNew ? <div className="mt-1 text-sm text-muted-foreground">Create a new RBAC role and define its scope.</div> : null}
           </div>
         </div>
 

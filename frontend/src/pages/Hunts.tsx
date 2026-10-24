@@ -291,7 +291,7 @@ export default function HuntsPage() {
             Hunts
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Investigation workspaces and proactive research activity
+            Proactive threat hunting
           </div>
         </div>
 
