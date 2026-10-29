@@ -5,6 +5,7 @@ export type CaseLite = {
   title: string;
   status: string;
   updated_at: string;
+  customer?: string | null;
 };
 
 export async function fetchCasesLite(q?: string): Promise<CaseLite[]> {

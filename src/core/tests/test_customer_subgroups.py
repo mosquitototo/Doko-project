@@ -65,6 +65,50 @@ class CustomerSubgroupTests(APITestCase):
         self.assertIsNone(self.alert.case.customer_id)
         self.assertFalse(self.alert.case.subgroups.exists())
 
+    def test_confirmed_cross_customer_merge_preserves_customers_and_subgroups(self):
+        from core.models import CaseExchange
+        self.case.customer = self.other
+        self.case.save(update_fields=["customer"])
+        self.case.subgroups.add(self.foreign)
+        self.alert.subgroups.add(self.group)
+        message = CaseExchange.objects.create(alert=self.alert, direction="outbound", body="Keep exchange")
+        own = CaseExchange.objects.create(case=self.case, direction="inbound", body="Case exchange")
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", {"case_id": str(self.case.pk), "allow_customer_mismatch": True}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.case.refresh_from_db()
+        self.alert.refresh_from_db()
+        message.refresh_from_db()
+        self.assertEqual(self.case.customer_id, self.other.pk)
+        self.assertEqual(self.alert.customer_id, self.customer.pk)
+        self.assertEqual(self.alert.case_id, self.case.pk)
+        self.assertSetEqual(set(self.case.subgroups.all()), {self.foreign})
+        self.assertSetEqual(set(self.alert.subgroups.all()), {self.group})
+        self.assertEqual(message.case_id, self.case.pk)
+        self.assertEqual(self.client.post(f"/api/alerts/{self.alert.pk}/unmerge/").status_code, 200)
+        message.refresh_from_db()
+        own.refresh_from_db()
+        self.assertIsNone(message.case_id)
+        self.assertEqual(own.case_id, self.case.pk)
+
+    def test_cross_customer_confirmation_does_not_bypass_case_permission(self):
+        self.case.customer = self.other
+        self.case.save(update_fields=["customer"])
+        user = get_user_model().objects.create_user(username="merge-scoped")
+        role = Role.objects.create(name="Merge source")
+        role.permissions.add(Permission.objects.get_or_create(code="alert.merge")[0])
+        UserRole.objects.create(user=user, role=role)
+        CustomerAccess.objects.create(customer=self.customer, role=role)
+        CustomerAccess.objects.create(customer=self.other, role=role)
+        self.client.force_authenticate(user)
+        payload = {"case_id": str(self.case.pk), "allow_customer_mismatch": True}
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", payload, format="json")
+        self.assertEqual(response.status_code, 403, response.data)
+        self.alert.refresh_from_db()
+        self.assertIsNone(self.alert.case_id)
+        role.permissions.add(Permission.objects.get_or_create(code="case.update")[0])
+        response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", payload, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+
     def test_customer_nested_crud_preserves_omitted_groups_and_sla(self):
         url = f"/api/settings/customers/{self.customer.pk}/"
         response = self.client.patch(url, {"subgroups": [{"id": str(self.group.pk), "name": "Renamed", "description": "Scope", "contacts": [{"name": "Contact", "email": "contact@example.org"}]}]}, format="json")

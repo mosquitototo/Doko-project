@@ -1,10 +1,20 @@
 from django.conf import settings
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_delete
 from django.dispatch import receiver
 from django.utils import timezone
 
 from .models import Alert, Case, CaseExchange, CaseExchangeFollowup, ReportInstance, UserProfile
 from .sla import alert_snapshot
+
+
+@receiver(pre_delete, sender=Alert)
+@receiver(pre_delete, sender=Case)
+def preserve_shared_exchanges(sender, instance, using="default", **kwargs):
+    scope = "alert" if sender is Alert else "case"
+    other = "case" if sender is Alert else "alert"
+    messages = CaseExchange.objects.using(using).filter(**{scope: instance})
+    messages.filter(**{f"{other}__isnull": True}).delete()
+    messages.filter(**{f"{other}__isnull": False}).update(**{scope: None})
 
 
 @receiver(post_save, sender=CaseExchange)
@@ -15,6 +25,8 @@ def stop_answered_exchange_followups(sender, instance, raw=False, using="default
         enabled=True, exchange__case_id=instance.case_id,
         exchange__created_at__lt=instance.created_at,
     ).select_related("exchange")
+    if instance.case_id is None:
+        configs = configs.filter(exchange__alert_id=instance.alert_id)
     ids = [cfg.pk for cfg in configs if instance.is_reply_to(cfg.exchange)]
     if ids:
         CaseExchangeFollowup.objects.using(using).filter(pk__in=ids).update(enabled=False, updated_at=timezone.now())

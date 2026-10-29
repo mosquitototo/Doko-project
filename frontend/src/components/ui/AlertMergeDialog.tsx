@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { fetchCasesLite, type CaseLite } from "../../api/casesLite";
+import ConfirmDialog from "./ConfirmDialog";
 import {
   MergeButton,
   CancelButton,
@@ -8,6 +9,10 @@ import {
 } from "../../components/ui/IconButton";
 
 type Mode = "new" | "existing";
+
+export function needsCustomerWarning(customerIds: (string | null | undefined)[], caseCustomer?: string | null) {
+  return new Set([...customerIds, caseCustomer].filter(Boolean)).size > 1;
+}
 
 function sortCases(cases: CaseLite[]) {
   const rank: Record<string, number> = {
@@ -31,24 +36,28 @@ export default function AlertMergeDialog({
   onConfirmNew,
   onConfirmExisting,
   busy,
+  customerIds = [],
 }: {
   open: boolean;
   onCancel: () => void;
   onConfirmNew: () => void;
-  onConfirmExisting: (caseId: string) => void;
+  onConfirmExisting: (caseId: string, allowCustomerMismatch?: boolean) => void;
   busy?: boolean;
+  customerIds?: (string | null | undefined)[];
 }) {
   const [mode, setMode] = useState<Mode>("new");
   const [q, setQ] = useState("");
   const [cases, setCases] = useState<CaseLite[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState("");
   const [loadingCases, setLoadingCases] = useState(false);
+  const [confirmCustomers, setConfirmCustomers] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setMode("new");
     setQ("");
     setSelectedCaseId("");
+    setConfirmCustomers(false);
   }, [open]);
 
   useEffect(() => {
@@ -71,6 +80,29 @@ export default function AlertMergeDialog({
   const sorted = useMemo(() => sortCases(cases), [cases]);
 
   if (!open) return null;
+
+  if (confirmCustomers) return (
+    <ConfirmDialog
+      open
+      title="Warning"
+      confirmText="Continue"
+      confirmTag="merge"
+      cancelText="Cancel"
+      cancelTag="cancel"
+      message={
+        <div className="space-y-2">
+          <div className="text-sm text-foreground">This merge involves different customers.</div>
+          <div className="text-xs italic text-muted-foreground">Alert data will be visible to users with access to the case.</div>
+        </div>
+      }
+      onCancel={() => { if (!busy) setConfirmCustomers(false); }}
+      onConfirm={() => {
+        if (busy) return;
+        setConfirmCustomers(false);
+        onConfirmExisting(selectedCaseId, true);
+      }}
+    />
+  );
 
   type CaseItem = { id: string; title: string; status: string };
 
@@ -278,7 +310,14 @@ export default function AlertMergeDialog({
           ) : (
             <MergeButton
               className="px-4 py-2"
-              onClick={() => onConfirmExisting(selectedCaseId)}
+              onClick={() => {
+                const selectedCase = cases.find(item => item.id === selectedCaseId);
+                if (needsCustomerWarning(customerIds, selectedCase?.customer)) {
+                  setConfirmCustomers(true);
+                } else {
+                  onConfirmExisting(selectedCaseId);
+                }
+              }}
               disabled={busy || !selectedCaseId}
             />
           )}

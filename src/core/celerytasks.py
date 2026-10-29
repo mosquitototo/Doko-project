@@ -312,6 +312,7 @@ def run_case_auto_followups():
         .select_related(
             "exchange",
             "exchange__case",
+            "exchange__alert",
             "quickpart",
         )
         .order_by("exchange__created_at", "created_at")
@@ -321,7 +322,8 @@ def run_case_auto_followups():
         source = cfg.exchange
         case = source.case
 
-        if not case or case.is_deleted or case.archived_at:
+        target = case or source.alert
+        if not target or target.is_deleted or (case and case.archived_at):
             skip("case_deleted_or_archived")
             continue
 
@@ -337,9 +339,10 @@ def run_case_auto_followups():
 
         replied = any(message.is_reply_to(source) for message in CaseExchange.objects.filter(
             case=case,
+            **({"alert_id": source.alert_id} if case is None else {}),
             direction="inbound",
             created_at__gt=source.created_at,
-        ).only("case_id", "direction", "references", "raw").iterator())
+        ).only("case_id", "alert_id", "reply_to_id", "direction", "references", "raw").iterator())
 
         if replied:
             cfg.enabled = False
@@ -363,6 +366,14 @@ def run_case_auto_followups():
             continue
 
         with transaction.atomic():
+            if source.alert_id:
+                Alert.objects.select_for_update().filter(pk=source.alert_id).first()
+                source.refresh_from_db()
+                case = source.case
+                target = case or source.alert
+                if not target or target.is_deleted or (case and case.archived_at):
+                    skip("case_deleted_or_archived")
+                    continue
             current_cfg = CaseExchangeFollowup.objects.select_for_update().get(pk=cfg.pk)
             if not current_cfg.enabled or current_cfg.last_triggered_at is not None or current_cfg.updated_at != cfg.updated_at:
                 skip("configuration_changed")
@@ -370,6 +381,8 @@ def run_case_auto_followups():
 
             followup = CaseExchange.objects.create(
                 case=case,
+                alert_id=source.alert_id,
+                reply_to=source,
                 created_by=None,
                 direction="outbound",
                 channel=source.channel or "email",
@@ -395,15 +408,16 @@ def run_case_auto_followups():
             cfg.last_triggered_at = now
             cfg.save(update_fields=["enabled", "last_triggered_at", "updated_at"])
 
-            TimelineItem.objects.create(
-                case=case,
-                date=now.date(),
-                type="case_exchange_created",
-                text=f"Automatic follow-up created: {(followup.subject or '(no subject)')}",
-                actor=None,
-            )
+            if case:
+                TimelineItem.objects.create(
+                    case=case,
+                    date=now.date(),
+                    type="case_exchange_created",
+                    text=f"Automatic follow-up created: {(followup.subject or '(no subject)')}",
+                    actor=None,
+                )
 
-        _send_followup_if_needed(case, followup, cfg.action)
+        _send_followup_if_needed(target, followup, cfg.action)
         created += 1
 
     cases = (
@@ -458,38 +472,46 @@ def run_case_auto_followups():
         if not qp or not qp.is_active:
             continue
 
-        followup = CaseExchange.objects.create(
-            case=case,
-            created_by=None,
-            direction="outbound",
-            channel=last_outbound.channel or "email",
-            sender="",
-            to=list(last_outbound.to or []),
-            cc=list(last_outbound.cc or []),
-            bcc=list(last_outbound.bcc or []),
-            subject=last_outbound.subject or "",
-            body=qp.body or "",
-            message_id="",
-            references=last_outbound.reply_references(),
-            raw={
-                "kind": "auto_followup",
-                "in_reply_to": str(last_outbound.message_id or "").strip(),
-                "source_exchange_id": str(last_outbound.id),
-                "quickpart_id": str(qp.id),
-                "action": case.auto_followup_action,
-            },
-        )
+        with transaction.atomic():
+            if last_outbound.alert_id:
+                Alert.objects.select_for_update().filter(pk=last_outbound.alert_id).first()
+                last_outbound.refresh_from_db()
+                if last_outbound.case_id != case.pk:
+                    continue
+            followup = CaseExchange.objects.create(
+                case=case,
+                alert_id=last_outbound.alert_id,
+                reply_to=last_outbound,
+                created_by=None,
+                direction="outbound",
+                channel=last_outbound.channel or "email",
+                sender="",
+                to=list(last_outbound.to or []),
+                cc=list(last_outbound.cc or []),
+                bcc=list(last_outbound.bcc or []),
+                subject=last_outbound.subject or "",
+                body=qp.body or "",
+                message_id="",
+                references=last_outbound.reply_references(),
+                raw={
+                    "kind": "auto_followup",
+                    "in_reply_to": str(last_outbound.message_id or "").strip(),
+                    "source_exchange_id": str(last_outbound.id),
+                    "quickpart_id": str(qp.id),
+                    "action": case.auto_followup_action,
+                },
+            )
 
-        case.auto_followup_enabled = False
-        case.save(update_fields=["auto_followup_enabled", "updated_at"])
+            case.auto_followup_enabled = False
+            case.save(update_fields=["auto_followup_enabled", "updated_at"])
 
-        TimelineItem.objects.create(
-            case=case,
-            date=now.date(),
-            type="case_exchange_created",
-            text=f"Automatic follow-up created: {(followup.subject or '(no subject)')}",
-            actor=None,
-        )
+            TimelineItem.objects.create(
+                case=case,
+                date=now.date(),
+                type="case_exchange_created",
+                text=f"Automatic follow-up created: {(followup.subject or '(no subject)')}",
+                actor=None,
+            )
 
         _send_followup_if_needed(case, followup, case.auto_followup_action)
         created += 1

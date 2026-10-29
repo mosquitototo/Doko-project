@@ -22,11 +22,11 @@ export async function escalateAlert(alertId: string, payload?: any): Promise<Mer
   return res.data;
 }
 
-export async function mergeAlertIntoCase(alertId: string, caseId: string): Promise<MergeAlertResponse> {
+export async function mergeAlertIntoCase(alertId: string, caseId: string, allowCustomerMismatch = false): Promise<MergeAlertResponse> {
   const csrfToken = await ensureCsrf();
   const res = await api.post(
     `/api/alerts/${alertId}/link/`,
-    { case_id: caseId },
+    { case_id: caseId, ...(allowCustomerMismatch ? { allow_customer_mismatch: true } : {}) },
     {
       headers: {
         "X-CSRFToken": csrfToken,

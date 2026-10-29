@@ -1015,59 +1015,67 @@ def _create_exchange_from_source(
         _runtime_variables(ctx),
     )
 
-    if source:
-        subject = _normalize_subject_for_reply(source.subject)
-        channel = source.channel or "email"
-        to = _reply_recipients_from_source(source)
-        cc = []
-        bcc = []
-        references = _reply_references_from_source(source)
-        in_reply_to = _reply_in_reply_to_from_source(source)
-        message_id = ""
-    else:
-        subject = action.get("subject") or ""
-        channel = action.get("channel") or "email"
-        to = _normalize_recipients(action.get("to"))
-        cc = _normalize_recipients(action.get("cc"))
-        bcc = _normalize_recipients(action.get("bcc"))
-        references = []
-        in_reply_to = ""
-        message_id = ""
+    with transaction.atomic():
+        if source and source.alert_id:
+            Alert.objects.select_for_update().filter(pk=source.alert_id).first()
+            source.refresh_from_db()
+            if source.case_id != case.pk:
+                raise ValueError("The source Exchange message is no longer linked to this case")
+        if source:
+            subject = _normalize_subject_for_reply(source.subject)
+            channel = source.channel or "email"
+            to = _reply_recipients_from_source(source)
+            cc = []
+            bcc = []
+            references = _reply_references_from_source(source)
+            in_reply_to = _reply_in_reply_to_from_source(source)
+            message_id = ""
+        else:
+            subject = action.get("subject") or ""
+            channel = action.get("channel") or "email"
+            to = _normalize_recipients(action.get("to"))
+            cc = _normalize_recipients(action.get("cc"))
+            bcc = _normalize_recipients(action.get("bcc"))
+            references = []
+            in_reply_to = ""
+            message_id = ""
 
-    if action.get("send_mode") == "send" and not to:
-        raise ValueError("At least one recipient is required to send an Exchange message")
+        if action.get("send_mode") == "send" and not to:
+            raise ValueError("At least one recipient is required to send an Exchange message")
 
-    exchange = CaseExchange.objects.create(
-        case=case,
-        created_by=None,
-        direction="outbound",
-        channel=channel,
-        subject=subject,
-        body=body,
-        sender="",
-        to=to if isinstance(to, list) else [],
-        cc=cc if isinstance(cc, list) else [],
-        bcc=bcc if isinstance(bcc, list) else [],
-        message_id=message_id,
-        references=references,
-        raw={
-            "kind": "automation_rule",
-            "automation_rule_id": _automation_rule_id(ctx),
-            "automation_action_index": _automation_action_index(action),
-            "automation_action_key": _automation_action_key(action),
-            "automation_execution_log_id": str(ctx.execution_log_id or ""),
-            "source_exchange_id": str(source.id) if source else "",
-            "quickpart_id": str(quickpart.id) if quickpart else "",
-            "send_mode": action.get("send_mode") or "save",
-            "in_reply_to": in_reply_to,
-        },
-    )
+        exchange = CaseExchange.objects.create(
+            case=case,
+            alert_id=source.alert_id if source else None,
+            reply_to=source,
+            created_by=None,
+            direction="outbound",
+            channel=channel,
+            subject=subject,
+            body=body,
+            sender="",
+            to=to if isinstance(to, list) else [],
+            cc=cc if isinstance(cc, list) else [],
+            bcc=bcc if isinstance(bcc, list) else [],
+            message_id=message_id,
+            references=references,
+            raw={
+                "kind": "automation_rule",
+                "automation_rule_id": _automation_rule_id(ctx),
+                "automation_action_index": _automation_action_index(action),
+                "automation_action_key": _automation_action_key(action),
+                "automation_execution_log_id": str(ctx.execution_log_id or ""),
+                "source_exchange_id": str(source.id) if source else "",
+                "quickpart_id": str(quickpart.id) if quickpart else "",
+                "send_mode": action.get("send_mode") or "save",
+                "in_reply_to": in_reply_to,
+            },
+        )
 
-    _create_timeline(
-        case,
-        f"Automation exchange created: {(exchange.subject or '(no subject)')}",
-        "case_exchange_created",
-    )
+        _create_timeline(
+            case,
+            f"Automation exchange created: {(exchange.subject or '(no subject)')}",
+            "case_exchange_created",
+        )
 
     if action.get("send_mode") == "send":
         from .views import dispatch_case_exchange_send

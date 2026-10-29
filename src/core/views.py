@@ -276,7 +276,7 @@ def me(request):
 
     avatar_url = None
     if profile.avatar:
-        avatar_url = request.build_absolute_uri(profile.avatar.url)
+        avatar_url = profile.avatar.url
 
     return Response(
         {
@@ -321,7 +321,7 @@ def me_update(request):
 
     avatar_url = None
     if profile.avatar:
-        avatar_url = request.build_absolute_uri(profile.avatar.url)
+        avatar_url = profile.avatar.url
 
     audit_event(
         request,
@@ -683,6 +683,7 @@ def _automation_exchange_payload(exchange: CaseExchange) -> dict:
 
 def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, request=None) -> int:
     created_count = 0
+    CaseExchange.objects.filter(alert=alert).exclude(case=case).update(case=case)
     items = _get_alert_case_exchange_items(alert)
 
     for idx, item in enumerate(items):
@@ -698,16 +699,22 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
         external_id = alert_exchange.get("external_id") or ""
 
         if message_id:
+            if CaseExchange.objects.filter(alert=alert, message_id=message_id).exists():
+                continue
             defaults = dict(payload)
             defaults.pop("message_id", None)
             defaults["created_by"] = actor if getattr(actor, "is_authenticated", False) else None
+            defaults["alert"] = alert
 
             try:
-                exchange, created = CaseExchange.objects.get_or_create(
-                    case=case,
-                    message_id=message_id,
-                    defaults=defaults,
-                )
+                exchange = CaseExchange.objects.filter(case=case, message_id=message_id).first() if case else None
+                if exchange:
+                    created = False
+                else:
+                    exchange, created = CaseExchange.objects.get_or_create(
+                        alert=alert, message_id=message_id,
+                        defaults={**defaults, "case": case},
+                    )
             except IntegrityError:
                 exchange = CaseExchange.objects.filter(case=case, message_id=message_id).first()
                 created = False
@@ -729,6 +736,7 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
 
             exchange = CaseExchange.objects.create(
                 case=case,
+                alert=alert,
                 created_by=actor if getattr(actor, "is_authenticated", False) else None,
                 **payload,
             )
@@ -738,6 +746,9 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
             continue
 
         created_count += 1
+
+        if case is None:
+            continue
 
         TimelineItem.objects.create(
             case=case,
@@ -1328,13 +1339,16 @@ class AlertLinkToCaseView(APIView):
                 )
 
             if alert.customer_id and case.customer_id and alert.customer_id != case.customer_id:
-                return Response(
-                    {
-                        "error": "customer_mismatch",
-                        "detail": "Alert and Case customers must match.",
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
+                if not user_has_perm(request.user, "case.update", customer_id=case.customer_id):
+                    raise PermissionDenied("Case not accessible for merging.")
+                if request.data.get("allow_customer_mismatch") is not True:
+                    return Response(
+                        {
+                            "error": "customer_mismatch",
+                            "detail": "Confirm merging alerts from a different customer.",
+                        },
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
             case_update_fields = []
             if not case.customer_id and alert.customer_id:
@@ -1595,6 +1609,7 @@ class AlertUnmergeView(APIView):
 
             restored_status = _alert_status_before_merge(alert)
 
+            CaseExchange.objects.filter(alert=alert, case=case_event).update(case=None)
             alert.case = None
             alert.status = restored_status
             alert.status_before_merge = ""
@@ -2515,7 +2530,7 @@ class CaseListLiteView(generics.ListAPIView):
     def list(self, request, *args, **kwargs):
         qs = self.get_queryset()
         data = [
-            {"id": str(x.id), "title": x.title, "status": x.status, "updated_at": x.updated_at.isoformat()}
+            {"id": str(x.id), "title": x.title, "status": x.status, "updated_at": x.updated_at.isoformat(), "customer": str(x.customer_id) if x.customer_id else None}
             for x in qs[:200]
         ]
         return Response(data)
@@ -4341,9 +4356,9 @@ def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
 
     exchange_payload = {
         "id": str(exchange.id),
-        "case_id": str(case.id),
+        "case_id": str(exchange.case_id) if exchange.case_id else None,
         "channel": exchange.channel,
-        "subject": _ensure_case_subject_prefix(exchange.subject or "", case),
+        "subject": _ensure_case_subject_prefix(exchange.subject or "", case) if isinstance(case, Case) else exchange.subject or "",
         "body": exchange.body or "",
         "sender": exchange.sender or "",
         "to": exchange.to or [],
@@ -4356,6 +4371,8 @@ def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
         "headers": headers,
         "created_at": exchange.created_at.isoformat() if exchange.created_at else "",
     }
+    if exchange.alert_id:
+        exchange_payload["alert_id"] = str(exchange.alert_id)
 
     raw["send_payload"] = exchange_payload
     raw["sent_at"] = timezone.now().isoformat()
@@ -4377,6 +4394,7 @@ def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
                 "exchange_payload": exchange_payload,
                 "exchange_id": exchange_payload["id"],
                 "case_id": exchange_payload["case_id"],
+                **({"alert_id": exchange_payload["alert_id"]} if exchange.alert_id else {}),
             },
         )
     except Exception as exc:
@@ -4398,46 +4416,89 @@ def dispatch_case_exchange_send(case: Case, exchange: CaseExchange, actor_user):
     return result
 
 
+def _exchange_target(request, target_id, scope="case"):
+    model = Alert if scope == "alert" else Case
+    target = get_object_or_404(model.objects.filter(is_deleted=False), pk=target_id)
+    _check_exchange_access(request, target)
+    return target
+
+
+def _check_exchange_access(request, target):
+    scope = "alert" if isinstance(target, Alert) else "case"
+    permission = f"{scope}.view" if request.method == "GET" else f"{scope}.update"
+    if not user_has_perm(request.user, permission, customer_id=target.customer_id):
+        raise PermissionDenied("Exchange not accessible.")
+    _check_case_access(request, target)
+
+
+def _exchange_filter(target):
+    return {"alert": target} if isinstance(target, Alert) else {"case": target}
+
+
+def _exchange_parent_fields(target, payload, *, exclude_id=None):
+    parent = payload.pop("reply_to", None)
+    qs = CaseExchange.objects.filter(**_exchange_filter(target))
+    if exclude_id is not None:
+        qs = qs.exclude(pk=exclude_id)
+    if parent is not None and not qs.filter(pk=parent.pk).exists():
+        raise ValidationError({"reply_to": "Reply must belong to this conversation."})
+    if parent is None:
+        reference = CaseExchange(raw=payload.get("raw") or {}, references=payload.get("references") or []).parent_message_id()
+        if reference:
+            matches = list(qs.filter(message_id__in=[reference, reference.strip("<>"), f"<{reference.strip('<>')}>"])[:2])
+            if len(matches) == 1:
+                parent = matches[0]
+    alert = target if isinstance(target, Alert) else (parent.alert if parent else None)
+    if alert:
+        alert = Alert.objects.select_for_update().get(pk=alert.pk)
+        if not isinstance(target, Alert) and alert.case_id != target.pk:
+            raise ValidationError({"reply_to": "The alert is no longer attached to this case."})
+    return {"case": alert.case if isinstance(target, Alert) else target, "alert": alert, "reply_to": parent}
+
+
+def _exchange_timeline(target, **kwargs):
+    if isinstance(target, Case):
+        TimelineItem.objects.create(case=target, **kwargs)
+
+
+def _exchange_automation(target, **kwargs):
+    if isinstance(target, Case):
+        _run_automation_safely(scope="case", target=target, **kwargs)
+
+
 class CaseExchangeListCreateForCaseView(APIView):
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "case.update"
     case_id_kwarg = "case_id"
 
     def initial(self, request, *args, **kwargs):
-        self.required_permission = "case.view" if request.method == "GET" else "case.update"
+        self.required_permission = f"{self.scope}.view" if request.method == "GET" else f"{self.scope}.update"
         super().initial(request, *args, **kwargs)
 
-    def _get_case(self, request, case_id: str) -> Case:
-        if request.user.is_staff:
-            case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
-        else:
-            customer_ids = get_accessible_customer_ids(request.user)
-            case = get_object_or_404(
-                Case.objects.filter(is_deleted=False, customer_id__in=customer_ids),
-                id=case_id,
-            )
-        _check_case_access(request, case)
-        return case
+    scope = "case"
+
+    def _get_case(self, request, case_id):
+        return _exchange_target(request, case_id, self.scope)
 
     def get(self, request, case_id: str):
         case = self._get_case(request, case_id)
-        qs = CaseExchange.objects.filter(case=case).select_related("created_by").order_by("created_at")
+        qs = CaseExchange.objects.filter(**_exchange_filter(case)).select_related("created_by").order_by("created_at")
         return Response(CaseExchangeSerializer(qs, many=True).data, status=status.HTTP_200_OK)
 
     def post(self, request, case_id: str):
         case = self._get_case(request, case_id)
-        _check_case_manage_access(request, case)
+        _check_exchange_access(request, case)
 
         ser = CaseExchangeCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
 
         payload = dict(ser.validated_data)
-        payload["subject"] = _ensure_case_subject_prefix(payload.get("subject", ""), case)
+        payload["subject"] = _ensure_case_subject_prefix(payload.get("subject", ""), case) if isinstance(case, Case) else payload.get("subject", "")
 
         try:
             with transaction.atomic():
                 ex = CaseExchange.objects.create(
-                    case=case,
+                    **_exchange_parent_fields(case, payload),
                     created_by=request.user,
                     **payload,
                 )
@@ -4447,8 +4508,8 @@ class CaseExchangeListCreateForCaseView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        TimelineItem.objects.create(
-            case=case,
+        _exchange_timeline(
+            case,
             date=date.today(),
             type="case_exchange_created",
             text=f"Exchange created: {(ex.subject or '(no subject)')}",
@@ -4457,15 +4518,15 @@ class CaseExchangeListCreateForCaseView(APIView):
 
         audit_event(
             request,
-            action="case.exchange.created",
+            action=f"{self.scope}.exchange.created",
             object_type="case_exchange",
             object_id=str(ex.id),
             object_repr=(ex.subject or "")[:255],
-            metadata={"case_id": str(case.id), "direction": ex.direction, "channel": ex.channel},
+            metadata={("alert_id" if isinstance(case, Alert) else "case_id"): str(case.id), "direction": ex.direction, "channel": ex.channel},
         )
 
         try:
-            dispatch_case_exchange_webhooks(case, ex, request.user)
+            dispatch_case_exchange_webhooks(case, ex, request.user) if isinstance(case, Case) else None
         except Exception:
             pass
 
@@ -4476,9 +4537,8 @@ class CaseExchangeListCreateForCaseView(APIView):
             else "case.exchange_outbound_created"
         )
 
-        _run_automation_safely(
-            scope="case",
-            target=case,
+        _exchange_automation(
+            case,
             event=exchange_event,
             actor=request.user,
             data={
@@ -4492,17 +4552,14 @@ class CaseExchangeListCreateForCaseView(APIView):
 
 
 class CaseExchangeSendView(APIView):
+    scope = "case"
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "case.update"
 
     def post(self, request, case_id: str):
-        if request.user.is_staff:
-            case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
-        else:
-            customer_ids = get_accessible_customer_ids(request.user)
-            case = get_object_or_404(Case.objects.filter(is_deleted=False, customer_id__in=customer_ids), id=case_id)
+        case = _exchange_target(request, case_id, self.scope)
 
-        _check_case_manage_access(request, case)
+        _check_exchange_access(request, case)
 
         ser = CaseExchangeCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -4520,13 +4577,13 @@ class CaseExchangeSendView(APIView):
         try:
             with transaction.atomic():
                 ex = CaseExchange.objects.create(
-                    case=case,
+                    **_exchange_parent_fields(case, payload),
                     created_by=request.user,
                     **payload,
                 )
 
-                TimelineItem.objects.create(
-                    case=case,
+                _exchange_timeline(
+                    case,
                     date=date.today(),
                     type="case_exchange_created",
                     text=f"Exchange sent: {(ex.subject or '(no subject)')}",
@@ -4551,25 +4608,25 @@ class CaseExchangeSendView(APIView):
 
             audit_event(
                 request,
-                action="case.exchange.send_failed",
+                action=f"{self.scope}.exchange.send_failed",
                 object_type="case_exchange",
                 object_id=str(ex.id),
                 object_repr=(ex.subject or "")[:255],
                 success=False,
                 status_code=500,
-                metadata={"case_id": str(case.id), "error": str(e)[:500]},
+                metadata={("alert_id" if isinstance(case, Alert) else "case_id"): str(case.id), "error": str(e)[:500]},
             )
             return Response(CaseExchangeSerializer(ex).data, status=status.HTTP_502_BAD_GATEWAY)
 
         audit_event(
             request,
-            action="case.exchange.sent",
+            action=f"{self.scope}.exchange.sent",
             object_type="case_exchange",
             object_id=str(ex.id),
             object_repr=(ex.subject or "")[:255],
             status_code=201,
             metadata={
-                "case_id": str(case.id),
+                ("alert_id" if isinstance(case, Alert) else "case_id"): str(case.id),
                 "soar_status": result.get("status") if isinstance(result, dict) else None,
                 "remote_run_id": (
                     result.get("response", {}).get("playbook_run_id")
@@ -4580,9 +4637,8 @@ class CaseExchangeSendView(APIView):
         )
 
 
-        _run_automation_safely(
-            scope="case",
-            target=case,
+        _exchange_automation(
+            case,
             event="case.exchange_outbound_created",
             actor=request.user,
             data={
@@ -4596,17 +4652,14 @@ class CaseExchangeSendView(APIView):
 
 
 class CaseExchangeFollowupBulkView(APIView):
+    scope = "case"
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "case.update"
 
     def post(self, request, case_id: str):
-        if request.user.is_staff:
-            case = get_object_or_404(Case.objects.filter(is_deleted=False), id=case_id)
-        else:
-            customer_ids = get_accessible_customer_ids(request.user)
-            case = get_object_or_404(Case.objects.filter(is_deleted=False, customer_id__in=customer_ids), id=case_id)
+        case = _exchange_target(request, case_id, self.scope)
 
-        _check_case_manage_access(request, case)
+        _check_exchange_access(request, case)
 
         exchange_ids = request.data.get("exchange_ids") or []
         if not isinstance(exchange_ids, list) or not exchange_ids:
@@ -4628,7 +4681,7 @@ class CaseExchangeFollowupBulkView(APIView):
         if quickpart_id:
             quickpart = get_object_or_404(CaseExchangeReplyQuickpart.objects.filter(is_active=True), id=quickpart_id)
 
-        exchanges = CaseExchange.objects.filter(case=case, id__in=exchange_ids)
+        exchanges = CaseExchange.objects.filter(**_exchange_filter(case), id__in=exchange_ids)
         found = set(str(x.id) for x in exchanges)
         if len(found) != len(set(str(x) for x in exchange_ids)):
             return Response({"detail": "one_or_more_exchanges_not_found"}, status=status.HTTP_404_NOT_FOUND)
@@ -4649,7 +4702,7 @@ class CaseExchangeFollowupBulkView(APIView):
 
         audit_event(
             request,
-            action="case.exchange.followup_configured",
+            action=f"{self.scope}.exchange.followup_configured",
             object_type="case",
             object_id=str(case.id),
             object_repr=case.title or "",
@@ -4660,23 +4713,41 @@ class CaseExchangeFollowupBulkView(APIView):
     
 
 class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
+    scope = "case"
     permission_classes = [IsAuthenticated, HasPermissionCode]
     required_permission = "case.update"
     serializer_class = CaseExchangeSerializer
-    queryset = CaseExchange.objects.select_related("case", "created_by")
+    queryset = CaseExchange.objects.select_related("case", "alert", "created_by")
 
     def initial(self, request, *args, **kwargs):
-        self.required_permission = "case.view" if request.method == "GET" else "case.update"
+        self.scope = "alert" if "alert_id" in kwargs else "case"
+        if self.scope == "case":
+            standalone = CaseExchange.objects.filter(pk=kwargs.get("pk"), case__isnull=True).values_list("alert_id", flat=True).first()
+            if standalone:
+                self.scope = "alert"
+        self.required_permission = f"{self.scope}.view" if request.method == "GET" else f"{self.scope}.update"
         super().initial(request, *args, **kwargs)
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.scope == "alert":
+            if "alert_id" in self.kwargs:
+                return qs.filter(alert_id=self.kwargs["alert_id"], alert__is_deleted=False)
+            return qs.filter(case__isnull=True, alert__is_deleted=False)
+        return qs.filter(case__isnull=False)
 
     def get_object(self):
         obj = super().get_object()
-        _check_case_access(self.request, obj.case)
+        _check_exchange_access(self.request, obj.alert if self.scope == "alert" else obj.case)
         return obj
+
+    def check_object_permissions(self, request, obj):
+        target = obj.alert if self.scope == "alert" else obj.case
+        super().check_object_permissions(request, target)
 
     def perform_update(self, serializer):
         inst = serializer.instance
-        _check_case_manage_access(self.request, inst.case)
+        _check_exchange_access(self.request, inst.alert if self.scope == "alert" else inst.case)
 
         before = {
             "subject": getattr(inst, "subject", None),
@@ -4687,7 +4758,28 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
             "direction": getattr(inst, "direction", None),
             "channel": getattr(inst, "channel", None),
         }
-        updated = serializer.save()
+        try:
+            with transaction.atomic():
+                inst.refresh_from_db()
+                thread_fields = ("case_id", "alert_id", "origin_alert_uuid", "reply_to_id", "raw", "references")
+                thread_state = tuple(getattr(inst, field) for field in thread_fields)
+                parent_fields = {}
+                if {"raw", "references"}.intersection(serializer.validated_data):
+                    payload = {
+                        "raw": serializer.validated_data.get("raw", inst.raw),
+                        "references": serializer.validated_data.get("references", inst.references),
+                    }
+                    parent_id = CaseExchange(**payload).parent_message_id()
+                    if parent_id != inst.parent_message_id() or (parent_id and not inst.reply_to_id):
+                        parent_fields = _exchange_parent_fields(inst.alert or inst.case, payload, exclude_id=inst.pk)
+                locked = CaseExchange.objects.select_for_update().get(pk=inst.pk)
+                current_state = tuple(getattr(locked, field) for field in thread_fields)
+                if current_state != thread_state:
+                    raise ValidationError({"detail": "The conversation changed during this update. Refresh and retry."})
+                serializer.instance = locked
+                updated = serializer.save(**parent_fields)
+        except IntegrityError:
+            raise ValidationError({"message_id": "This message ID already exists in this conversation."})
         after = {
             "subject": getattr(updated, "subject", None),
             "body": getattr(updated, "body", None),
@@ -4698,8 +4790,8 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
             "channel": getattr(updated, "channel", None),
         }
 
-        TimelineItem.objects.create(
-            case=updated.case,
+        _exchange_timeline(
+            updated.alert if self.scope == "alert" else updated.case,
             date=date.today(),
             type="case_exchange_updated",
             text=f"Exchange updated: {(updated.subject or '(no subject)')}",
@@ -4708,12 +4800,12 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
 
         audit_event(
             self.request,
-            action="case.exchange.updated",
+            action=f"{self.scope}.exchange.updated",
             object_type="case_exchange",
             object_id=str(updated.id),
             object_repr="Case exchange",
             metadata={
-                "case_id": str(updated.case_id),
+                f"{self.scope}_id": str(updated.alert_id if self.scope == "alert" else updated.case_id),
                 "updated_section": "exchange",
                 "updated_fields": [
                     key
@@ -4725,15 +4817,15 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
         )
 
     def perform_destroy(self, instance):
-        case = instance.case
-        _check_case_manage_access(self.request, case)
+        case = instance.alert if self.scope == "alert" else instance.case
+        _check_exchange_access(self.request, case)
         
         sid = str(instance.id)
         subj = (instance.subject or "")[:255]
         instance.delete()
 
-        TimelineItem.objects.create(
-            case=case,
+        _exchange_timeline(
+            case,
             date=date.today(),
             type="case_exchange_deleted",
             text=f"Exchange deleted: {(subj or '(no subject)')}",
@@ -4742,12 +4834,37 @@ class CaseExchangeRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIVie
 
         audit_event(
             self.request,
-            action="case.exchange.deleted",
+            action=f"{self.scope}.exchange.deleted",
             object_type="case_exchange",
             object_id=sid,
             object_repr=subj,
-            metadata={"case_id": str(case.id)},
+            metadata={("alert_id" if isinstance(case, Alert) else "case_id"): str(case.id)},
         )
+
+
+
+class AlertExchangeListCreateView(CaseExchangeListCreateForCaseView):
+    scope = "alert"
+    case_id_kwarg = None
+
+
+class AlertExchangeSendView(CaseExchangeSendView):
+    scope = "alert"
+    required_permission = "alert.update"
+
+
+class AlertExchangeFollowupBulkView(CaseExchangeFollowupBulkView):
+    scope = "alert"
+    required_permission = "alert.update"
+
+
+class AlertExchangeQuickpartsView(APIView):
+    permission_classes = [IsAuthenticated, HasPermissionCode]
+    required_permission = "alert.view"
+
+    def get(self, request):
+        qs = CaseExchangeReplyQuickpart.objects.filter(is_active=True)
+        return Response(CaseExchangeReplyQuickpartSerializer(qs, many=True).data)
 
 
 class CaseExchangeReplyQuickpartViewSet(viewsets.ModelViewSet):

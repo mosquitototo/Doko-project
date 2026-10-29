@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, type ReactNode } from "react";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import Card from "../components/ui/Card";
+import AlertExchangesPanel from "../components/cases/detail/AlertExchangesPanel";
 import UserAvatar from "../components/ui/UserAvatar";
 import StatusBadge from "../components/ui/StatusBadge";
 import SeverityBadge from "../components/ui/SeverityBadge";
@@ -334,6 +335,7 @@ const ASSET_STATUS_OPTIONS = [
 export default function AlertDetail() {
   const { id } = useParams();
   const alertId = id || "";
+  const [tab, setTab] = useState<"summary" | "exchanges">("summary");
 
   const navigate = useNavigate();
   const { push } = useToast();
@@ -1037,6 +1039,16 @@ export default function AlertDetail() {
       </Card>
 
 
+      <div aria-label="Alert sections" className="flex gap-1.5 overflow-x-auto py-1">
+        {(["summary", "exchanges"] as const).map(value => (
+          <button key={value} type="button" onClick={() => setTab(value)} className={`flex-1 shrink-0 whitespace-nowrap border-none px-3 py-2 text-sm hover:bg-slate-800 hover:text-white font-semibold cursor-pointer transition-all duration-200 rounded-xl border-2 hover:-translate-y-1 active:scale-95 ${tab === value ? "bg-slate-800 text-white shadow-md hover:shadow-xl transform auto-scale-95" : "border-gray-100 bg-white shadow-md hover:shadow-xl hover:bg-slate-100 text-slate-500 hover:border-gray-300 hover:text-slate-700"}`}>
+            {value === "summary" ? "Summary" : "Exchanges"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "exchanges" ? <AlertExchangesPanel key={alertId} alertId={alertId} busy={busyAction} canUpdate={canUpdate} /> : null}
+      <div className={tab === "summary" ? "space-y-6" : "hidden"}>
       <Card className="min-w-0 p-5">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
           <div className="text-sm font-semibold text-foreground">Description</div>
@@ -1268,8 +1280,11 @@ export default function AlertDetail() {
         </div>
       </Card>
 
+      </div>
+
       <AlertMergeDialog
         open={!!mergeUI}
+        customerIds={[item.customer]}
         busy={busyAction}
         onCancel={() => setMergeUI(null)}
         onConfirmNew={async () => {
@@ -1307,11 +1322,11 @@ export default function AlertDetail() {
             setBusyAction(false);
           }
         }}
-        onConfirmExisting={async (caseId) => {
+        onConfirmExisting={async (caseId, allowCustomerMismatch) => {
           if (!mergeUI || !canMerge) return;
           setBusyAction(true);
           try {
-            const r = await mergeAlertIntoCase(mergeUI.alertId, caseId);
+            const r = await mergeAlertIntoCase(mergeUI.alertId, caseId, allowCustomerMismatch);
 
             if (r.already_linked) {
               push({

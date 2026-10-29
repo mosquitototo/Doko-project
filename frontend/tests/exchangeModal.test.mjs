@@ -27,8 +27,23 @@ function functionsFrom(path, names) {
   return found.join("\n");
 }
 
+test("existing-case merge warns only when customers differ", async () => {
+  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  try {
+    const { needsCustomerWarning } = await server.ssrLoadModule("/src/components/ui/AlertMergeDialog.tsx");
+    assert.equal(needsCustomerWarning(["a"], "b"), true);
+    assert.equal(needsCustomerWarning(["a", "b"], "a"), true);
+    assert.equal(needsCustomerWarning(["a", "b"], null), true);
+    assert.equal(needsCustomerWarning(["a", "a"], "a"), false);
+    assert.equal(needsCustomerWarning(["a"], null), false);
+    assert.equal(needsCustomerWarning([null], "a"), false);
+  } finally {
+    await server.close();
+  }
+});
+
 const code = stripTypeScriptTypes([
-  functionsFrom("../src/pages/CaseDetail.tsx", ["onSendExchange", "onCreateExchange", "saveReplyDraftToConversationOnly", "closeReplyModal", "openReplyModal", "buildReferencesForReply"]),
+  functionsFrom("../src/components/cases/detail/useExchanges.ts", ["onSendExchange", "onCreateExchange", "saveReplyDraftToConversationOnly", "closeReplyModal", "openReplyModal", "buildReferencesForReply"]),
   functionsFrom("../src/components/cases/detail/utils.ts", ["parseCsv", "normalizeSubjectForReply"]),
 ].join("\n"));
 
@@ -49,6 +64,8 @@ function setup(overrides = {}) {
   state.refreshExchanges = async () => { state.refreshes++; };
   state.sendCaseExchange ??= async (id, payload) => { state.sent.push({ id, payload }); };
   state.createCaseExchange ??= async (id, payload) => { state.sent.push({ id, payload }); };
+  state.sendExchange = state.sendCaseExchange;
+  state.createExchange = state.createCaseExchange;
   runInNewContext(code, state);
   return state;
 }

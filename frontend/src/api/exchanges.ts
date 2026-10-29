@@ -3,7 +3,9 @@ import { ensureCsrf } from "./auth";
 
 export type CaseExchange = {
   id: string;
-  case: string;
+  case: string | null;
+  alert?: string | null;
+  reply_to?: string | null;
 
   direction: "inbound" | "outbound";
   channel: "email" | "other";
@@ -40,14 +42,14 @@ export type CaseExchangeFollowup = {
   updated_at: string;
 };
 
-export async function listCaseExchanges(caseId: string) {
-  const r = await api.get(`/api/cases/${caseId}/exchanges/`);
+export async function listCaseExchanges(caseId: string, scope: "case" | "alert" = "case") {
+  const r = await api.get(`/api/${scope}s/${caseId}/exchanges/`);
   return r.data as CaseExchange[];
 }
 
-export async function createCaseExchange(caseId: string, payload: Partial<CaseExchange>) {
+export async function createCaseExchange(caseId: string, payload: Partial<CaseExchange>, scope: "case" | "alert" = "case") {
   const csrfToken = await ensureCsrf();
-  const r = await api.post(`/api/cases/${caseId}/exchanges/`, payload, {
+  const r = await api.post(`/api/${scope}s/${caseId}/exchanges/`, payload, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -55,10 +57,10 @@ export async function createCaseExchange(caseId: string, payload: Partial<CaseEx
   return r.data as CaseExchange;
 }
 
-export async function sendCaseExchange(caseId: string, payload: Partial<CaseExchange>) {
+export async function sendCaseExchange(caseId: string, payload: Partial<CaseExchange>, scope: "case" | "alert" = "case") {
   const csrfToken = await ensureCsrf();
 
-  const r = await api.post(`/api/cases/${caseId}/exchanges/send/`, payload, {
+  const r = await api.post(`/api/${scope}s/${caseId}/exchanges/send/`, payload, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -67,16 +69,16 @@ export async function sendCaseExchange(caseId: string, payload: Partial<CaseExch
   return r.data as CaseExchange;
 }
 
-export async function deleteCaseExchange(exchangeId: string) {
+export async function deleteCaseExchange(exchangeId: string, alertId?: string) {
   const csrfToken = await ensureCsrf();
-  await api.delete(`/api/exchanges/${exchangeId}/`, {
+  await api.delete(alertId ? `/api/alerts/${alertId}/exchanges/${exchangeId}/` : `/api/exchanges/${exchangeId}/`, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
   });
 }
 
-export async function updateCaseExchange(exchange: CaseExchange, payload: Partial<CaseExchange>) {
+export async function updateCaseExchange(exchange: CaseExchange, payload: Partial<CaseExchange>, alertId?: string) {
   const csrfToken = await ensureCsrf();
 
   const body = {
@@ -96,7 +98,7 @@ export async function updateCaseExchange(exchange: CaseExchange, payload: Partia
     raw: payload.raw ?? exchange.raw ?? {},
   };
 
-  const r = await api.put(`/api/exchanges/${exchange.id}/`, body, {
+  const r = await api.put(alertId ? `/api/alerts/${alertId}/exchanges/${exchange.id}/` : `/api/exchanges/${exchange.id}/`, body, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
@@ -113,15 +115,21 @@ export async function configureCaseExchangeFollowups(
     delay_unit: "minute" | "hour" | "day" | "week" | "month";
     quickpart_id?: string | null;
     action: "save" | "send";
-  }
+  },
+  scope: "case" | "alert" = "case"
 ) {
   const csrfToken = await ensureCsrf();
 
-  const r = await api.post(`/api/cases/${caseId}/exchanges/followups/`, payload, {
+  const r = await api.post(`/api/${scope}s/${caseId}/exchanges/followups/`, payload, {
     headers: {
       "X-CSRFToken": csrfToken,
     },
   });
 
   return r.data as CaseExchangeFollowup[];
+}
+
+export async function listAlertExchangeQuickparts() {
+  const r = await api.get("/api/alerts/exchange-quickparts/");
+  return r.data;
 }

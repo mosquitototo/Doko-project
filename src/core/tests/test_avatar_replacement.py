@@ -31,6 +31,25 @@ class AvatarReplacementTests(APITestCase):
         Image.new("RGB", (2, 2), "blue").save(data, format="PNG")
         return SimpleUploadedFile(name, data.getvalue(), content_type="image/png")
 
+    def test_profile_avatar_url_does_not_depend_on_proxy_protocol(self):
+        expected = "/media/" + self.profile.avatar.name
+        for headers in ({}, {"HTTP_X_FORWARDED_PROTO": "https"}):
+            with self.subTest(headers=headers):
+                response = self.client.get("/api/me/", **headers)
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(response.data["avatar_url"], expected)
+                response = self.client.patch("/api/me/update/", {"timezone": "Europe/Paris"}, format="json", **headers)
+                self.assertEqual(response.status_code, 200, response.data)
+                self.assertEqual(response.data["avatar_url"], expected)
+
+    def test_profile_without_avatar_keeps_null_url(self):
+        user = get_user_model().objects.create_user(username="no-avatar")
+        self.client.force_authenticate(user)
+        self.assertIsNone(self.client.get("/api/me/").data["avatar_url"])
+        self.assertIsNone(self.client.patch("/api/me/update/", {}, format="json").data["avatar_url"])
+        from core.serializers import MeSerializer
+        self.assertIsNone(MeSerializer(user).data["avatar_url"])
+
     def test_replacement_deletes_only_old_avatar_after_commit(self):
         other = get_user_model().objects.create_user(username="other-avatar")
         other.profile.avatar.save("other.png", self.upload(), save=True)
@@ -42,7 +61,7 @@ class AvatarReplacementTests(APITestCase):
         self.assertFalse(self.storage.exists(self.old_name))
         self.assertTrue(self.storage.exists(self.profile.avatar.name))
         self.assertTrue(self.storage.exists(other.profile.avatar.name))
-        self.assertTrue(response.data["avatar_url"].endswith(self.profile.avatar.url))
+        self.assertEqual(response.data["avatar_url"], "/media/" + self.profile.avatar.name)
 
     def test_invalid_upload_preserves_old_avatar(self):
         with self.captureOnCommitCallbacks(execute=True):
@@ -106,5 +125,5 @@ class AvatarReplacementTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         profile = UserProfile.objects.get(user=user)
         self.assertTrue(self.storage.exists(profile.avatar.name))
-        self.assertTrue(response.data["avatar_url"].endswith(profile.avatar.url))
+        self.assertEqual(response.data["avatar_url"], "/media/" + profile.avatar.name)
         self.assertTrue(self.storage.exists(self.old_name))

@@ -170,13 +170,10 @@ class MeSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "username", "is_admin", "avatar_url"]
 
     def get_avatar_url(self, obj):
-        request = self.context.get("request")
         profile = getattr(obj, "profile", None)
         if not profile or not profile.avatar:
             return None
-        if request is None:
-            return profile.avatar.url
-        return request.build_absolute_uri(profile.avatar.url)
+        return profile.avatar.url
 
     def update(self, instance, validated_data):
         profile_data = validated_data.pop("profile", {})
@@ -1320,11 +1317,22 @@ class CaseExchangeSerializer(serializers.ModelSerializer):
     created_by_username = serializers.CharField(source="created_by.username", read_only=True)
     followup_config = CaseExchangeFollowupSerializer(read_only=True)
 
+    def update(self, instance, validated_data):
+        instance.refresh_from_db()
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        if validated_data:
+            instance.save(update_fields=list(validated_data))
+        instance.refresh_from_db()
+        return instance
+
     class Meta:
         model = CaseExchange
         fields = [
             "id",
             "case",
+            "alert",
+            "reply_to",
             "direction",
             "channel",
             "subject",
@@ -1341,13 +1349,27 @@ class CaseExchangeSerializer(serializers.ModelSerializer):
             "created_by_username",
             "created_at",
         ]
-        read_only_fields = ["id", "case", "created_by", "created_by_username", "created_at"]
+        read_only_fields = ["id", "case", "alert", "reply_to", "created_by", "created_by_username", "created_at"]
+        validators = []
+
+    def validate(self, attrs):
+        message_id = attrs.get("message_id", getattr(self.instance, "message_id", ""))
+        if self.instance and message_id:
+            qs = CaseExchange.objects.filter(message_id=message_id).exclude(pk=self.instance.pk)
+            if self.instance.origin_alert_uuid:
+                qs = qs.filter(origin_alert_uuid=self.instance.origin_alert_uuid)
+            else:
+                qs = qs.filter(case_id=self.instance.case_id, origin_alert_uuid__isnull=True)
+            if qs.exists():
+                raise serializers.ValidationError({"message_id": "This message ID already exists in this conversation."})
+        return attrs
 
 class CaseExchangeCreateSerializer(serializers.ModelSerializer):
     body = serializers.CharField(required=False, allow_blank=True, trim_whitespace=False)
     class Meta:
         model = CaseExchange
         fields = [
+            "reply_to",
             "direction",
             "channel",
             "subject",

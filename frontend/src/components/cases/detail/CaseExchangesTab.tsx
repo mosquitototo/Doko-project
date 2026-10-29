@@ -48,6 +48,7 @@ type BulkDraft = {
 };
 
 type Props = {
+  alertId?: string;
   busy: boolean;
   canUpdateCase: boolean;
   exchangesBusy: boolean;
@@ -80,8 +81,8 @@ type Props = {
   selectedQuickpartId: string;
   applyQuickpartToBody: (id: string) => void;
   onCreateExchange: () => Promise<void>;
-  autoFollowupEnabled: boolean;
-  setAutoFollowupEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  autoFollowupEnabled?: boolean;
+  setAutoFollowupEnabled?: React.Dispatch<React.SetStateAction<boolean>>;
   autoFollowupDelayValue: string;
   setAutoFollowupDelayValue: React.Dispatch<React.SetStateAction<string>>;
   autoFollowupDelayUnit: "minute" | "hour" | "day" | "week" | "month";
@@ -90,11 +91,11 @@ type Props = {
   >;
   autoFollowupQuickpartId: string;
   setAutoFollowupQuickpartId: React.Dispatch<React.SetStateAction<string>>;
-  autoFollowupOpen: boolean;
-  setAutoFollowupOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  saveAutoFollowupSettings: () => Promise<void>;
-  autoFollowupAction: "save" | "send";
-  setAutoFollowupAction: React.Dispatch<React.SetStateAction<"save" | "send">>;
+  autoFollowupOpen?: boolean;
+  setAutoFollowupOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  saveAutoFollowupSettings?: () => Promise<void>;
+  autoFollowupAction?: "save" | "send";
+  setAutoFollowupAction?: React.Dispatch<React.SetStateAction<"save" | "send">>;
   onSendExchange: () => Promise<void>;
   followupSelectionOpen: boolean;
   setFollowupSelectionOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -137,7 +138,7 @@ export default function CaseExchangesTab(props: Props) {
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <div className="text-lg font-semibold text-foreground">Exchanges</div>
-              <div className="text-xs text-muted-foreground">Conversation history and outbound drafts for this case</div>
+              <div className="text-xs text-muted-foreground">Conversation history and outbound drafts for this {props.alertId ? "alert" : "case"}</div>
             </div>
 
             <div className="flex items-center gap-2">
@@ -305,7 +306,7 @@ export default function CaseExchangesTab(props: Props) {
                                         if (!ok) return;
                                         props.setExchangesBusy(true);
                                         try {
-                                          await deleteCaseExchange(x.id);
+                                          await deleteCaseExchange(x.id, props.alertId);
                                           props.push({ kind: "success", title: "Deleted" });
                                           await props.refreshExchanges();
                                         } catch (err: any) {
@@ -405,7 +406,7 @@ export default function CaseExchangesTab(props: Props) {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+                <div onMouseDown={(event) => event.preventDefault()} className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
                   <SaveButton
                     disabled={props.busy || props.exchangesBusy || !props.canUpdateCase}
                     onClick={async () => {
@@ -423,7 +424,7 @@ export default function CaseExchangesTab(props: Props) {
                           body: props.exchangeViewDraft.body,
                           message_id: props.exchangeViewDraft.message_id,
                           references: parseCsv(props.exchangeViewDraft.references),
-                        } as any);
+                        } as any, props.alertId);
                         await props.refreshExchanges();
                         props.push({ kind: "success", title: "Exchange updated" });
                         props.setExchangeView(null);
@@ -490,7 +491,7 @@ export default function CaseExchangesTab(props: Props) {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+              <div onMouseDown={(event) => event.preventDefault()} className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
                 <SaveButton disabled={props.busy || props.exchangesBusy || !props.canUpdateCase} title="Save message" onClick={() => void props.saveReplyDraftToConversationOnly()}>{props.exchangesBusy ? "Saving…" : "Save"}</SaveButton>
                 <SendButton
                   disabled={props.busy || props.exchangesBusy || !props.canUpdateCase}
@@ -546,7 +547,7 @@ export default function CaseExchangesTab(props: Props) {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
+              <div onMouseDown={(event) => event.preventDefault()} className="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
                 <SaveButton disabled={props.busy || props.exchangesBusy} onClick={() => void props.onCreateExchange()} title="Save message">{props.exchangesBusy ? "Saving…" : "Add"}</SaveButton>
                 <SendButton
                   disabled={props.busy || props.exchangesBusy || !props.canUpdateCase}
@@ -711,7 +712,7 @@ export default function CaseExchangesTab(props: Props) {
                     />
                   </div>
                 </div>
-                <div className="border-t border-border px-5 py-4">
+                <div onMouseDown={(event) => event.preventDefault()} className="border-t border-border px-5 py-4">
                   <div className="flex flex-row items-center justify-end gap-2">
                   <SaveButton title="Save message" disabled={props.busy || props.exchangesBusy || !props.canUpdateCase} onClick={() => void props.saveBulkReplyConversationOnly()}>{props.exchangesBusy ? "Saving…" : "Save"}</SaveButton>
                   <SendButton

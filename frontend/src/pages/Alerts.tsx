@@ -825,12 +825,12 @@ export default function Alerts() {
     }
   }
 
-  async function bulkMergeExistingCase(caseId: string) {
+  async function bulkMergeExistingCase(caseId: string, allowCustomerMismatch = false) {
     if (!canMerge || selectedIds.length === 0) return;
     setBusyAction(true);
     try {
       for (const aid of selectedIds) {
-        await mergeAlertIntoCase(aid, caseId);
+        await mergeAlertIntoCase(aid, caseId, allowCustomerMismatch);
       }
       push({ kind: "success", title: "Merged into case" });
       setItems((prev) =>
@@ -1565,6 +1565,7 @@ export default function Alerts() {
 
       <AlertMergeDialog
         open={!!mergeUI}
+        customerIds={[items.find(item => item.id === mergeUI?.alertId)?.customer]}
         busy={busyAction}
         onCancel={() => setMergeUI(null)}
         onConfirmNew={async () => {
@@ -1612,12 +1613,12 @@ export default function Alerts() {
             setBusyAction(false);
           }
         }}
-        onConfirmExisting={async (caseId) => {
+        onConfirmExisting={async (caseId, allowCustomerMismatch) => {
           if (!mergeUI || !canMerge) return;
           setBusyAction(true);
 
           try {
-            const r: any = await mergeAlertIntoCase(mergeUI.alertId, caseId);
+            const r: any = await mergeAlertIntoCase(mergeUI.alertId, caseId, allowCustomerMismatch);
 
             if (r.already_linked) {
               push({
@@ -1686,6 +1687,7 @@ export default function Alerts() {
 
       <AlertMergeDialog
         open={bulkMergeUI}
+        customerIds={items.filter(item => selectedIds.includes(item.id)).map(item => item.customer)}
         busy={busyAction}
         onCancel={() => setBulkMergeUI(false)}
         onConfirmNew={async () => {
@@ -1725,6 +1727,9 @@ export default function Alerts() {
               </ul>
               <div className="text-xs text-muted-foreground">
                 If you continue, the case will be created without a customer.
+              </div>
+              <div className="text-xs italic text-muted-foreground">
+                Alert data will be visible to users with access to the case.
               </div>
             </div>
           ) : null

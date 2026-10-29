@@ -363,7 +363,10 @@ class CaseExchange(models.Model):
         OTHER = "other", "Other"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    case = models.ForeignKey("core.Case", on_delete=models.CASCADE, related_name="exchanges", db_index=True)
+    case = models.ForeignKey("core.Case", null=True, blank=True, on_delete=models.SET_NULL, related_name="exchanges", db_index=True)
+    alert = models.ForeignKey("core.Alert", null=True, blank=True, on_delete=models.SET_NULL, related_name="exchanges")
+    origin_alert_uuid = models.UUIDField(null=True, blank=True, editable=False)
+    reply_to = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="replies")
 
     direction = models.CharField(max_length=20, choices=Direction.choices, db_index=True)
     channel = models.CharField(max_length=20, choices=Channel.choices, default=Channel.EMAIL, db_index=True)
@@ -400,12 +403,28 @@ class CaseExchange(models.Model):
             models.UniqueConstraint(
                 fields=["case", "message_id"],
                 name="uniq_case_message_id",
+                condition=~models.Q(message_id="") & models.Q(origin_alert_uuid__isnull=True),
+            ),
+            models.UniqueConstraint(
+                fields=["origin_alert_uuid", "message_id"],
+                name="uniq_alert_message_id",
                 condition=~models.Q(message_id=""),
-            )
+            ),
+            models.CheckConstraint(
+                condition=models.Q(case__isnull=False) | models.Q(alert__isnull=False),
+                name="exchange_has_owner",
+            ),
         ]
 
     def __str__(self) -> str:
         return f"{self.case_id} {self.direction} {self.channel} {self.created_at}"
+
+    def save(self, *args, **kwargs):
+        if self.alert_id and self.origin_alert_uuid is None:
+            self.origin_alert_uuid = self.alert_id
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = set(kwargs["update_fields"]) | {"origin_alert_uuid"}
+        super().save(*args, **kwargs)
 
     @property
     def is_followup(self):
@@ -419,9 +438,16 @@ class CaseExchange(models.Model):
     def is_reply_to(self, source):
         if self.direction != "inbound" or self.case_id != source.case_id:
             return False
+        if self.alert_id != source.alert_id:
+            return False
+        if self.reply_to_id:
+            return self.reply_to_id == source.pk
         source_id = str(source.message_id or "").strip().strip("<>")
         if not source_id:
             return False
+        return self.parent_message_id().strip("<>") == source_id
+
+    def parent_message_id(self):
         raw = self.raw if isinstance(self.raw, dict) else {}
         parent = str(raw.get("in_reply_to") or "").strip()
         headers = raw.get("headers")
@@ -430,7 +456,7 @@ class CaseExchange(models.Model):
         if not parent:
             references = [str(value).strip() for value in (self.references or []) if str(value or "").strip()]
             parent = references[-1] if references else ""
-        return parent.strip("<>") == source_id
+        return parent
 
 
 class CaseExchangeFollowup(models.Model):
