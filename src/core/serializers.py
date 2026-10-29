@@ -353,7 +353,11 @@ class AlertSerializer(CustomerSubgroupAssignmentMixin, serializers.ModelSerializ
 
         return super().create(validated_data)
 
+    @transaction.atomic
     def update(self, instance, validated_data):
+        instance.exchange_projection_state = Alert.objects.select_for_update().values_list(
+            "exchange_projection_state", flat=True,
+        ).get(pk=instance.pk)
         old_status = instance.status
         new_status = validated_data.get("status", old_status)
         request = self.context.get("request")

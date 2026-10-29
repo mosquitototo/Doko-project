@@ -681,7 +681,10 @@ def _automation_exchange_payload(exchange: CaseExchange) -> dict:
     }
 
 
-def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, request=None) -> int:
+@transaction.atomic
+def _materialize_alert_case_exchanges(*, case: Case | None, alert: Alert, actor, request=None, notify_case=True) -> int:
+    alert = Alert.objects.select_for_update().get(pk=alert.pk)
+    projection_state = {key: dict(value) for key, value in (alert.exchange_projection_state or {}).items()}
     created_count = 0
     CaseExchange.objects.filter(alert=alert).exclude(case=case).update(case=case)
     items = _get_alert_case_exchange_items(alert)
@@ -698,8 +701,14 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
         projection_key = alert_exchange.get("projection_key") or ""
         external_id = alert_exchange.get("external_id") or ""
 
+        identity = json.dumps(["external_id", external_id] if external_id else ["message_id", message_id] if message_id else ["projection_key", projection_key])
+        if identity in projection_state:
+            continue
+
         if message_id:
-            if CaseExchange.objects.filter(alert=alert, message_id=message_id).exists():
+            existing = CaseExchange.objects.filter(alert=alert, message_id=message_id).first()
+            if existing:
+                projection_state[identity] = {"exchange_id": str(existing.pk), "case_notified": True}
                 continue
             defaults = dict(payload)
             defaults.pop("message_id", None)
@@ -727,11 +736,13 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
 
             if external_id:
                 existing_qs = CaseExchange.objects.filter(
-                    case=case,
+                    **({"case": case} if case else {"alert": alert}),
                     raw__alert_exchange__external_id=str(external_id),
                 )
 
-            if existing_qs.exists():
+            existing = existing_qs.first()
+            if existing:
+                projection_state[identity] = {"exchange_id": str(existing.pk), "case_notified": True}
                 continue
 
             exchange = CaseExchange.objects.create(
@@ -742,12 +753,19 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
             )
             created = True
 
-        if not created or not exchange:
+        if not exchange:
             continue
 
-        created_count += 1
+        projection_state[identity] = {"exchange_id": str(exchange.pk), "case_notified": not created}
+        if created:
+            created_count += 1
 
-        if case is None:
+    for state in projection_state.values():
+        if case is None or not notify_case or state["case_notified"]:
+            continue
+        exchange = CaseExchange.objects.filter(pk=state["exchange_id"], alert=alert, case=case).first()
+        state["case_notified"] = True
+        if exchange is None:
             continue
 
         TimelineItem.objects.create(
@@ -782,6 +800,8 @@ def _materialize_alert_case_exchanges(*, case: Case, alert: Alert, actor, reques
             )
         )
 
+    if projection_state != alert.exchange_projection_state:
+        Alert.objects.filter(pk=alert.pk).update(exchange_projection_state=projection_state)
     return created_count
 
 
@@ -4482,6 +4502,12 @@ class CaseExchangeListCreateForCaseView(APIView):
 
     def get(self, request, case_id: str):
         case = self._get_case(request, case_id)
+        if isinstance(case, Alert):
+            with transaction.atomic():
+                case = Alert.objects.select_for_update().get(pk=case.pk)
+                _materialize_alert_case_exchanges(
+                    case=case.case, alert=case, actor=None, request=request, notify_case=False,
+                )
         qs = CaseExchange.objects.filter(**_exchange_filter(case)).select_related("created_by").order_by("created_at")
         return Response(CaseExchangeSerializer(qs, many=True).data, status=status.HTTP_200_OK)
 

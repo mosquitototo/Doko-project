@@ -27,6 +27,61 @@ class AlertExchangeTests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         return CaseExchange.objects.get(pk=response.data["id"])
 
+    def test_raw_messages_are_visible_before_merge_without_reimport_after_edit_or_delete(self):
+        self.alert.raw = {"case_exchanges": [{"body": "<p>Original</p>", "message_id": "<original>", "references": ["<parent>"]}]}
+        self.alert.save(update_fields=["raw"])
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data), 1)
+        message = response.data[0]
+        self.assertEqual(message["body"], "<p>Original</p>")
+        self.assertEqual(message["references"], ["<parent>"])
+        url = f"{self.url}{message['id']}/"
+        self.assertEqual(self.client.patch(url, {"message_id": "<server-id>"}, format="json").status_code, 200)
+        self.assertEqual(len(self.client.get(self.url).data), 1)
+        self.assertEqual(self.client.delete(url).status_code, 204)
+        self.assertEqual(self.client.get(self.url).data, [])
+        from core.views import _materialize_alert_case_exchanges
+        _materialize_alert_case_exchanges(case=self.case, alert=self.alert, actor=self.user)
+        self.assertFalse(CaseExchange.objects.filter(alert=self.alert).exists())
+
+    def test_nested_raw_messages_are_isolated_by_alert(self):
+        for alert in (self.alert, Alert.objects.create(title="Other alert")):
+            alert.raw = {"projections": {"case_exchanges": [{"external_id": "shared", "body": alert.title}]}}
+            alert.save(update_fields=["raw"])
+            response = self.client.get(f"/api/alerts/{alert.pk}/exchanges/")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(response.data), 1)
+            self.assertEqual(response.data[0]["body"], alert.title)
+
+    def test_prepending_raw_message_does_not_hide_new_message(self):
+        first = {"message_id": "<first>", "body": "First"}
+        self.alert.raw = {"case_exchanges": [first]}
+        self.alert.save(update_fields=["raw"])
+        self.assertEqual(len(self.client.get(self.url).data), 1)
+        self.alert.raw = {"case_exchanges": [{"message_id": "<second>", "body": "Second"}, first]}
+        self.alert.save(update_fields=["raw"])
+        response = self.client.get(self.url)
+        self.assertEqual({message["message_id"] for message in response.data}, {"<first>", "<second>"})
+
+    def test_raw_import_preserves_merge_events_and_unmerge_identity(self):
+        from core.models import TimelineItem
+        self.alert.raw = {"case_exchanges": [{"body": "Incoming", "message_id": "<incoming>"}]}
+        self.alert.save(update_fields=["raw"])
+        with self.captureOnCommitCallbacks() as callbacks:
+            response = self.client.get(self.url)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(callbacks, [])
+        message_id = response.data[0]["id"]
+        for _ in range(2):
+            response = self.client.post(f"/api/alerts/{self.alert.pk}/link/", {"case_id": str(self.case.pk)}, format="json")
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(CaseExchange.objects.filter(case=self.case).count(), 1)
+            self.assertEqual(TimelineItem.objects.filter(case=self.case, type="case_exchange_created").count(), 1)
+            response = self.client.post(f"/api/alerts/{self.alert.pk}/unmerge/", {}, format="json")
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertEqual(self.client.get(self.url).data[0]["id"], message_id)
+
     def test_standalone_crud_keeps_raw_body_and_stable_identity(self):
         message = self.message(message_id="<first>")
         self.assertEqual(message.alert_id, self.alert.pk)
@@ -349,6 +404,45 @@ class AlertExchangeTests(APITestCase):
 
 
 class AlertExchangeConcurrencyTests(TransactionTestCase):
+    def test_concurrent_alert_edit_preserves_import_state(self):
+        from core.views import AlertRetrieveUpdateDestroyView
+        user = get_user_model().objects.create_user(username="import-admin", is_staff=True)
+        alert = Alert.objects.create(title="Original", raw={"case_exchanges": [{"body": "Incoming", "message_id": "<incoming>"}]})
+        loaded = Event()
+        resume = Event()
+        original_update = AlertRetrieveUpdateDestroyView.perform_update
+
+        def update(view, serializer):
+            loaded.set()
+            if not resume.wait(10):
+                raise TimeoutError("Import did not complete")
+            return original_update(view, serializer)
+
+        def edit():
+            close_old_connections()
+            try:
+                client = APIClient()
+                client.force_authenticate(user)
+                return client.patch(f"/api/alerts/{alert.pk}/", {"title": "Updated"}, format="json").status_code
+            finally:
+                connections.close_all()
+
+        client = APIClient()
+        client.force_authenticate(user)
+        url = f"/api/alerts/{alert.pk}/exchanges/"
+        with patch.object(AlertRetrieveUpdateDestroyView, "perform_update", update), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(edit)
+            try:
+                self.assertTrue(loaded.wait(10))
+                response = client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(len(response.data), 1)
+            finally:
+                resume.set()
+            self.assertEqual(pending.result(timeout=10), 200)
+        self.assertEqual(client.delete(f"{url}{response.data[0]['id']}/").status_code, 204)
+        self.assertEqual(client.get(url).data, [])
+
     def test_concurrent_header_change_cannot_leave_stale_reply_target(self):
         user = get_user_model().objects.create_user(username="header-admin", is_staff=True)
         case = Case.objects.create(title="Concurrent headers")
@@ -438,6 +532,55 @@ class AlertExchangeConcurrencyTests(TransactionTestCase):
 
 
 class AlertExchangeMigrationTests(TransactionTestCase):
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        super().tearDown()
+
+    def test_projection_upgrade_remembers_old_import_before_deletion(self):
+        old_target = [("core", "0049_alert_exchanges")]
+        executor = MigrationExecutor(connection)
+        executor.migrate(old_target)
+        apps = executor.loader.project_state(old_target).apps
+        OldAlert = apps.get_model("core", "Alert")
+        OldCase = apps.get_model("core", "Case")
+        OldExchange = apps.get_model("core", "CaseExchange")
+        case = OldCase.objects.create(title="Previously merged")
+        alert = OldAlert.objects.create(title="Old alert", case=case, raw={"case_exchanges": [{"body": "Keep raw", "message_id": "<original>"}]})
+        message = OldExchange.objects.create(case=case, alert=alert, origin_alert_uuid=alert.pk, direction="inbound", body="Keep raw", message_id="<updated>", raw={"alert_exchange": {"source_alert_id": str(alert.pk), "projection_key": "0", "external_id": ""}})
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        user = get_user_model().objects.create_user(username="migration-admin", is_staff=True)
+        client = APIClient()
+        client.force_authenticate(user)
+        response = client.delete(f"/api/exchanges/{message.pk}/")
+        self.assertEqual(response.status_code, 204)
+        response = client.get(f"/api/alerts/{alert.pk}/exchanges/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, [])
+        self.assertEqual(Alert.objects.get(pk=alert.pk).raw, {"case_exchanges": [{"body": "Keep raw", "message_id": "<original>"}]})
+
+    def test_projection_upgrade_keeps_new_message_prepended_to_old_raw(self):
+        old_target = [("core", "0049_alert_exchanges")]
+        executor = MigrationExecutor(connection)
+        executor.migrate(old_target)
+        apps = executor.loader.project_state(old_target).apps
+        OldAlert = apps.get_model("core", "Alert")
+        OldCase = apps.get_model("core", "Case")
+        OldExchange = apps.get_model("core", "CaseExchange")
+        case = OldCase.objects.create(title="Previously merged")
+        alert = OldAlert.objects.create(title="Old alert", case=case, raw={"case_exchanges": [{"body": "New", "message_id": "<new>"}, {"body": "Old", "message_id": "<old>"}]})
+        message = OldExchange.objects.create(case=case, alert=alert, origin_alert_uuid=alert.pk, direction="inbound", body="Old", message_id="<old>", raw={"alert_exchange": {"source_alert_id": str(alert.pk), "projection_key": "0", "external_id": ""}})
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+        user = get_user_model().objects.create_user(username="migration-admin", is_staff=True)
+        client = APIClient()
+        client.force_authenticate(user)
+        response = client.get(f"/api/alerts/{alert.pk}/exchanges/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({item["message_id"] for item in response.data}, {"<new>", "<old>"})
+        self.assertTrue(CaseExchange.objects.filter(pk=message.pk).exists())
+
     def test_upgrade_preserves_messages_and_attributes_only_related_descendants(self):
         old_target = [("core", "0048_case_alert_catalog_severity")]
         new_target = [("core", "0049_alert_exchanges")]

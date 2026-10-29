@@ -55,6 +55,7 @@ class Alert(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
     raw = models.JSONField(default=dict, blank=True)
+    exchange_projection_state = models.JSONField(default=dict, blank=True, editable=False)
     sla_acknowledged_at = models.DateTimeField(null=True, blank=True, db_index=True)
     sla_acknowledged_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
